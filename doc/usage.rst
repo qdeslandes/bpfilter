@@ -149,11 +149,14 @@ With:
       - ``eq``
       - ``$PROTOCOL``
       - ``ipv4`` and ``ipv6`` are supported.
+<<<<<<< Updated upstream
     * - L4 protocol
       - ``meta.l4_proto``
       - ``eq``
       - ``$PROTOCOL``
       - ``icmp``, ``icmpv6``, ``tcp``, ``udp`` are supported.
+=======
+>>>>>>> Stashed changes
 
 **IPv4 matchers**
 

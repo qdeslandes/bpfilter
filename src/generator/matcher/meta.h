@@ -9,4 +9,8 @@ struct bf_matcher;
 struct bf_program;
 
 int bf_matcher_generate_meta(struct bf_program *program,
+<<<<<<< Updated upstream
                              const struct bf_matcher *matcher);
+=======
+                            const struct bf_matcher *matcher);
+>>>>>>> Stashed changes

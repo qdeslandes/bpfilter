@@ -1,7 +1,11 @@
 # Create an XDP chain
 chain BF_HOOK_NFT_INGRESS policy ACCEPT
     rule
+<<<<<<< Updated upstream
         ip6.saddr fc00::fbaf:7b6b:ba41:abce
+=======
+        meta.l3_proto ipv4
+>>>>>>> Stashed changes
         counter
         ACCEPT
     rule
@@ -9,10 +13,13 @@ chain BF_HOOK_NFT_INGRESS policy ACCEPT
         counter
         ACCEPT
     rule
+<<<<<<< Updated upstream
         meta.l4_proto tcp
         counter
         ACCEPT
     rule
+=======
+>>>>>>> Stashed changes
         ip4.saddr 192.168.1.1
         counter
         ACCEPT

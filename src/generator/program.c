@@ -32,6 +32,7 @@
 #include "generator/matcher/meta.h"
 #include "generator/matcher/tcp.h"
 #include "generator/matcher/udp.h"
+#include "generator/matcher/meta.h"
 #include "generator/stub.h"
 #include "shared/helper.h"
 
@@ -557,6 +558,32 @@ static int _bf_program_generate_functions(struct bf_program *program)
     return 0;
 }
 
+#include <bpf/btf.h>
+
+int make_btf(void)
+{
+    struct btf *b = NULL;
+    int r;
+
+    b = btf__new_empty();
+    if (!b)
+        return -EINVAL;
+
+    btf__add_int(b, "u64", 8, 0);
+    btf__add_int(b, "u32", 4, 0);
+    btf__add_struct(b, "bf_counters", 16);
+    btf__add_field(b, "packets", 1, 0, 0);
+    btf__add_field(b, "bytes", 1, 64, 0);
+
+    r = btf__load_into_kernel(b);
+    if (r < 0)
+        return bf_err_code(r, "failed to load btf data into kernel");
+
+    bf_info("BTF LOAD INTO KENREL RETURNED %d", r);
+
+    return btf__fd(b);
+}
+
 static int _bf_program_load_counters_map(struct bf_program *program)
 {
     _cleanup_close_ int _fd = -1;
@@ -565,9 +592,13 @@ static int _bf_program_load_counters_map(struct bf_program *program)
 
     bf_assert(program);
 
+    r = make_btf();
+    if (r < 0)
+        return bf_err_code(r, "fail to create BTF for counters map");
+
     r = bf_bpf_map_create(program->cmap_name, BPF_MAP_TYPE_ARRAY,
                           sizeof(uint32_t), sizeof(struct bf_counter),
-                          program->num_counters, 0, &_fd);
+                          program->num_counters, 0, r, &_fd);
     if (r < 0)
         return bf_err_code(errno, "failed to create counters map");
 
@@ -594,7 +625,7 @@ static int _bf_program_load_printer_map(struct bf_program *program)
         return bf_err_code(r, "failed to assemble printer map string");
 
     r = bf_bpf_map_create(program->pmap_name, BPF_MAP_TYPE_ARRAY,
-                          sizeof(uint32_t), pstr_len, 1, BPF_F_RDONLY_PROG,
+                          sizeof(uint32_t), pstr_len, 1, BPF_F_RDONLY_PROG, 0,
                           &fd);
     if (r)
         return bf_err_code(r, "failed to create printer map");
@@ -768,8 +799,10 @@ int bf_program_generate(struct bf_program *program, bf_list *rules,
     if (r)
         return r;
 
+    int i = 0;
     bf_list_foreach (rules, rule_node) {
         struct bf_rule *rule = bf_list_node_get_data(rule_node);
+        rule->index = i++;
 
         if (rule->ifindex != 0 && rule->ifindex != program->ifindex)
             continue;

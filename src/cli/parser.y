@@ -21,6 +21,10 @@
     #include <linux/in.h>
     #include <linux/in6.h>
     #include <linux/if_ether.h>
+<<<<<<< Updated upstream
+=======
+    #include <linux/socket.h>
+>>>>>>> Stashed changes
     #include <limits.h>
     #include "core/verdict.h"
     #include "core/hook.h"
@@ -63,9 +67,13 @@
 %token POLICY
 %token RULE
 %token COUNTER
+<<<<<<< Updated upstream
 %token <sval> MATCHER_META_L3_PROTO MATCHER_META_L4_PROTO
 %token <sval> MATCHER_IP_PROTO MATCHER_IPADDR MATCHER_PORT
 %token <sval> MATCHER_IP6_ADDR
+=======
+%token <sval> MATCHER_META_L3_PROTO MATCHER_META_L4_PROTO MATCHER_IP_PROTO MATCHER_IPADDR MATCHER_PORT
+>>>>>>> Stashed changes
 %token <sval> STRING
 %token <sval> HOOK VERDICT MATCHER_TYPE MATCHER_OP MATCHER_TCP_FLAGS
 
@@ -124,7 +132,7 @@ verdict         : VERDICT
                         free($1);
                         YYABORT;
                     }
- 
+
                     free($1);
                     $$ = verdict;
                 }
@@ -214,7 +222,7 @@ matchers        : matcher
                     }
 
                     TAKE_PTR($1);
-                    $$ = TAKE_PTR(list);         
+                    $$ = TAKE_PTR(list);
                 }
                 | matchers matcher
                 {
@@ -285,17 +293,21 @@ matcher         : matcher_type matcher_op MATCHER_META_L3_PROTO
                     if (bf_streq($3, "icmp")) {
                         proto = IPPROTO_ICMP;
                     } else {
+<<<<<<< Updated upstream
                         yyerror(chains, "unsupported ip4.proto value '%s'\n", $3);
+=======
+                        yyerror(chains, "unsupported L3 proto to match '%s'\n", $3);
+>>>>>>> Stashed changes
                         YYABORT;
                     }
-    
+
                     free($3);
-                    
+
                     if (bf_matcher_new(&matcher, $1, $2, &proto, sizeof(proto)) < 0) {
                         yyerror(chains, "failed to create a new matcher\n");
                         YYABORT;
-                    } 
-                    
+                    }
+
                     $$ = TAKE_PTR(matcher);
                 }
                 | matcher_type matcher_op MATCHER_IPADDR
