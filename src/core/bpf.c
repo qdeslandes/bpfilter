@@ -79,7 +79,7 @@ int bf_bpf_prog_load(const char *name, unsigned int prog_type, void *img,
 }
 
 int bf_bpf_map_create(const char *name, unsigned int type, size_t key_size,
-                      size_t value_size, size_t max_entries, uint32_t flags,
+                      size_t value_size, size_t max_entries, uint32_t flags, int btf_fd,
                       int *fd)
 {
     union bpf_attr attr = {
@@ -92,6 +92,16 @@ int bf_bpf_map_create(const char *name, unsigned int type, size_t key_size,
     int r;
 
     snprintf(attr.map_name, BPF_OBJ_NAME_LEN, "%s", name);
+
+    if (btf_fd != 0) {
+        bf_info("Create map with BTF: %d", btf_fd);
+        attr.btf_fd = btf_fd;
+        attr.btf_key_type_id = 2;
+        attr.btf_value_type_id = 3;
+    } else {
+
+        bf_info("Create map without BTF: %d", btf_fd);
+    }
 
     r = _bpf(BPF_MAP_CREATE, &attr);
     if (r < 0)

@@ -50,7 +50,7 @@ int bf_bpf_prog_load(const char *name, unsigned int prog_type, void *img,
  * @return 0 on success, or negative errno value on failure.
  */
 int bf_bpf_map_create(const char *name, unsigned int type, size_t key_size,
-                      size_t value_size, size_t max_entries, uint32_t flags,
+                      size_t value_size, size_t max_entries, uint32_t flags, int btf_fd,
                       int *fd);
 
 /**

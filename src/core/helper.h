@@ -7,6 +7,8 @@
 
 #include <stddef.h>
 
+#define PIN_PATH_LEN 64
+
 /**
  * @brief Read the contents of a file into a buffer.
  *

@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "core/dump.h"
+#include "core/helper.h"
 #include "core/hook.h"
 #include "core/list.h"
 #include "core/verdict.h"
@@ -25,8 +26,6 @@
 #include "generator/printer.h"
 #include "generator/reg.h"
 #include "shared/front.h"
-
-#define PIN_PATH_LEN 64
 
 /**
  * @brief Convenience macro to get the offset of a field in @ref
