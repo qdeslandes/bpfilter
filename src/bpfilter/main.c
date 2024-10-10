@@ -421,7 +421,8 @@ static int _bf_run(void)
         return bf_err_r(errno, "listen() failed");
 
     bf_info("waiting for requests...");
-
+    fprintf(stdout, "EWGWGWE\n");
+    printf("lol wa\n");
     while (!_bf_stop_received) {
         _cleanup_close_ int client_fd = -1;
         _cleanup_bf_request_ struct bf_request *request = NULL;
@@ -461,6 +462,7 @@ int main(int argc, char *argv[])
 
     bf_logger_setup();
 
+    bf_err("erherh");
     r = bf_btf_setup();
     if (r < 0)
         return bf_err_r(r, "failed to setup BTF module");
