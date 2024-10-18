@@ -27,6 +27,7 @@
 #include "bpfilter/cgen/matcher/udp.h"
 #include "bpfilter/cgen/printer.h"
 #include "bpfilter/cgen/prog/map.h"
+#include "bpfilter/cgen/dump.h"
 #include "bpfilter/cgen/reg.h"
 #include "bpfilter/cgen/stub.h"
 #include "bpfilter/ctx.h"
@@ -1086,6 +1087,9 @@ int bf_program_load(struct bf_program *new_prog, struct bf_program *old_prog)
     r = _bf_program_load_printer_map(new_prog);
     if (r)
         return r;
+
+    if (bf_opts_is_verbose(BF_VERBOSE_BYTECODE))
+        bf_program_dump_bytecode(new_prog, false);
 
     r = bf_bpf_prog_load(name, bf_hook_to_bpf_prog_type(new_prog->hook),
                          new_prog->img, new_prog->img_size,
