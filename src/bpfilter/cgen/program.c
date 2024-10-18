@@ -490,6 +490,7 @@ static int _bf_program_fixup(struct bf_program *program,
             continue;
 
         switch (type) {
+        case BF_FIXUP_TYPE_JMP_END_OF_CHAIN:
         case BF_FIXUP_TYPE_JMP_NEXT_RULE:
             insn_type = BF_FIXUP_INSN_OFF;
             value = (int)(program->img_size - fixup->insn - 1U);
@@ -899,6 +900,10 @@ int bf_program_generate(struct bf_program *program)
     r = program->runtime.ops->gen_inline_epilogue(program);
     if (r)
         return r;
+
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_END_OF_CHAIN);
+    if (r < 0)
+        return bf_err_r(r, "failed to fixup BF_FIXUP_TYPE_JMP_END_OF_CHAIN");
 
     // BF_ARG_1: index of the current rule in counters map.
     EMIT(program, BPF_MOV32_IMM(BF_ARG_1, bf_list_size(&chain->rules)));
