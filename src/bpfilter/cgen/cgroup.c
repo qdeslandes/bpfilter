@@ -107,36 +107,32 @@ static int _bf_cgroup_gen_inline_prologue(struct bf_program *program)
         _cleanup_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BF_REG_1);
 
-        EMIT_SWICH_OPTION(
-            &swich, AF_INET, BPF_MOV64_IMM(BF_REG_1, htons(ETH_P_IP)),
-            BPF_STX_MEM(BPF_H, BF_REG_CTX, BF_REG_1, BF_PROG_CTX_OFF(l3_proto)),
-            BPF_MOV64_IMM(BF_REG_1, 0),
-            BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_1,
-                        BF_PROG_CTX_OFF(l3_offset)));
-        EMIT_SWICH_OPTION(
-            &swich, AF_INET6, BPF_MOV64_IMM(BF_REG_1, htons(ETH_P_IPV6)),
-            BPF_STX_MEM(BPF_H, BF_REG_CTX, BF_REG_1, BF_PROG_CTX_OFF(l3_proto)),
-            BPF_MOV64_IMM(BF_REG_1, 0),
-            BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_1,
-                        BF_PROG_CTX_OFF(l3_offset)));
-        EMIT_SWICH_DEFAULT(
-            &swich,
-            BPF_MOV64_IMM(BF_REG_RET,
-                          program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT)),
-            BPF_EXIT_INSN());
+        EMIT_SWICH_OPTION(&swich, AF_INET,
+                          BPF_MOV64_IMM(BF_REG_1, htons(ETH_P_IP)));
+        EMIT_SWICH_OPTION(&swich, AF_INET6,
+                          BPF_MOV64_IMM(BF_REG_1, htons(ETH_P_IPV6)));
+        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BF_REG_1, 0));
 
         r = bf_swich_generate(&swich);
         if (r)
             return r;
     }
 
+    EMIT(program,
+         BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_1, BF_PROG_CTX_OFF(l3_proto)));
+    EMIT(program, BPF_MOV64_IMM(BF_REG_1, 0));
+    EMIT(program,
+         BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_1, BF_PROG_CTX_OFF(l3_offset)));
+
     r = bf_stub_parse_l3_hdr(program);
     if (r)
         return r;
 
+    /*
     r = bf_stub_parse_l4_hdr(program);
     if (r)
         return r;
+    */
 
     return 0;
 }

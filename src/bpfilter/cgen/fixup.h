@@ -40,6 +40,8 @@ enum bf_fixup_type
 {
     /// Jump to the beginning of the next rule.
     BF_FIXUP_TYPE_JMP_NEXT_RULE,
+    /// Jump to the end of the chain.
+    BF_FIXUP_TYPE_JMP_END_OF_CHAIN,
     /// Set the counters map file descriptor in the @c BPF_LD_MAP_FD instruction.
     BF_FIXUP_TYPE_COUNTERS_MAP_FD,
     /// Set the printer map file descriptor in the @c BPF_LD_MAP_FD instruction.

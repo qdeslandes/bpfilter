@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "bpfilter/cgen/cgroup.h"
+#include "bpfilter/cgen/dump.h"
 #include "bpfilter/cgen/fixup.h"
 #include "bpfilter/cgen/jmp.h"
 #include "bpfilter/cgen/matcher/ip4.h"
@@ -27,7 +28,6 @@
 #include "bpfilter/cgen/matcher/udp.h"
 #include "bpfilter/cgen/printer.h"
 #include "bpfilter/cgen/prog/map.h"
-#include "bpfilter/cgen/dump.h"
 #include "bpfilter/cgen/reg.h"
 #include "bpfilter/cgen/stub.h"
 #include "bpfilter/ctx.h"
@@ -490,6 +490,7 @@ static int _bf_program_fixup(struct bf_program *program,
             continue;
 
         switch (type) {
+        case BF_FIXUP_TYPE_JMP_END_OF_CHAIN:
         case BF_FIXUP_TYPE_JMP_NEXT_RULE:
             insn_type = BF_FIXUP_INSN_OFF;
             value = (int)(program->img_size - fixup->insn - 1U);
@@ -853,6 +854,17 @@ static int _bf_program_generate_runtime_init(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BF_REG_CTX, BF_ARG_1, BF_PROG_CTX_OFF(arg)));
 
+    // Initialize details about the various headers
+    EMIT(program, BPF_MOV64_IMM(BF_REG_2, 0));
+    EMIT(program,
+         BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_2, BF_PROG_CTX_OFF(l3_offset)));
+    EMIT(program,
+         BPF_STX_MEM(BPF_W, BF_REG_CTX, BF_REG_2, BF_PROG_CTX_OFF(l4_offset)));
+    EMIT(program,
+         BPF_STX_MEM(BPF_H, BF_REG_CTX, BF_REG_2, BF_PROG_CTX_OFF(l3_proto)));
+    EMIT(program,
+         BPF_STX_MEM(BPF_B, BF_REG_CTX, BF_REG_2, BF_PROG_CTX_OFF(l4_proto)));
+
     return 0;
 }
 
@@ -888,6 +900,10 @@ int bf_program_generate(struct bf_program *program)
     r = program->runtime.ops->gen_inline_epilogue(program);
     if (r)
         return r;
+
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_END_OF_CHAIN);
+    if (r < 0)
+        return bf_err_r(r, "failed to fixup BF_FIXUP_TYPE_JMP_END_OF_CHAIN");
 
     // BF_ARG_1: index of the current rule in counters map.
     EMIT(program, BPF_MOV32_IMM(BF_ARG_1, bf_list_size(&chain->rules)));
