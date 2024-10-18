@@ -144,9 +144,15 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
 
 int bf_stub_parse_l3_hdr(struct bf_program *program)
 {
+    _cleanup_bf_jmpctx_ struct bf_jmpctx _;
     int r;
 
     bf_assert(program);
+
+    // If L3 protocol is unknown, we don't need to parse L3
+    EMIT(program,
+         BPF_LDX_MEM(BPF_H, BF_ARG_4, BF_REG_CTX, BF_PROG_CTX_OFF(l3_proto)));
+    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BF_ARG_4, 0, 0));
 
     // BF_ARG_1: address of the dynptr in the context.
     EMIT(program, BPF_MOV64_REG(BF_ARG_1, BF_REG_CTX));
@@ -161,8 +167,6 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BF_ARG_3, BF_PROG_CTX_OFF(l3_raw)));
 
     // BF_ARG_4: size of the buffer
-    EMIT(program,
-         BPF_LDX_MEM(BPF_H, BF_ARG_4, BF_REG_CTX, BF_PROG_CTX_OFF(l3_proto)));
     {
         _cleanup_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BF_ARG_4);
@@ -171,11 +175,6 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
                           BPF_MOV64_IMM(BF_ARG_4, sizeof(struct iphdr)));
         EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
                           BPF_MOV64_IMM(BF_ARG_4, sizeof(struct ipv6hdr)));
-        EMIT_SWICH_DEFAULT(
-            &swich,
-            BPF_MOV64_IMM(BF_REG_RET,
-                          program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT)),
-            BPF_EXIT_INSN());
 
         r = bf_swich_generate(&swich);
         if (r)
@@ -240,9 +239,15 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 
 int bf_stub_parse_l4_hdr(struct bf_program *program)
 {
+    _cleanup_bf_jmpctx_ struct bf_jmpctx _;
     int r;
 
     bf_assert(program);
+
+    // If L4 protocol is unknown, we don't need to parse L4
+    EMIT(program,
+         BPF_LDX_MEM(BPF_H, BF_ARG_4, BF_REG_CTX, BF_PROG_CTX_OFF(l4_proto)));
+    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BF_ARG_4, 0, 0));
 
     // BF_ARG_1: address of the dynptr in the context.
     EMIT(program, BPF_MOV64_REG(BF_ARG_1, BF_REG_CTX));
@@ -257,8 +262,6 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BF_ARG_3, BF_PROG_CTX_OFF(l4_raw)));
 
     // BF_ARG_4: size of the buffer.
-    EMIT(program,
-         BPF_LDX_MEM(BPF_B, BF_REG_4, BF_REG_CTX, BF_PROG_CTX_OFF(l4_proto)));
     {
         _cleanup_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BF_ARG_4);
