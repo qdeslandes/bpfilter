@@ -129,3 +129,26 @@ add_custom_target(coverage
 	BYPRODUCTS html_coverage
 	COMMENT "Generate coverage report"
 )
+
+add_custom_target(benchmarks-summary
+	COMMAND
+		${CMAKE_COMMAND}
+			-E make_directory
+			${CMAKE_BINARY_DIR}/doc/html/benchmarks
+	COMMAND
+		${CMAKE_COMMAND}
+			-E copy
+			${CMAKE_CURRENT_SOURCE_DIR}/_static/logo-light-mode.png
+			${CMAKE_CURRENT_BINARY_DIR}/html/benchmarks/logo-light-mode.png
+	COMMAND
+		${CMAKE_COMMAND}
+			-E copy
+			${CMAKE_CURRENT_SOURCE_DIR}/_static/logo-dark-mode.png
+			${CMAKE_CURRENT_BINARY_DIR}/html/benchmarks/logo-dark-mode.png
+	COMMAND
+		${CMAKE_CURRENT_SOURCE_DIR}/benchmarks-summary-generator
+			--results ${CMAKE_BINARY_DIR}/output/benchmarks-results
+			--template ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks-summary.html.template
+			--output ${CMAKE_BINARY_DIR}/doc/html/_static/benchmarks-summary.html
+	COMMENT "Benchmark results"
+)

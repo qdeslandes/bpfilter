@@ -1,0 +1,72 @@
+#!/usr/bin/env python
+
+import dateutil.parser
+import pathlib
+import json
+import git
+import argparse
+
+def main() -> None:
+    benchmarks = {"commits": [], "results": {}}
+    commits = []
+    benchNames = []
+    parser = argparse.ArgumentParser(
+                    prog='ProgramName',
+                    description='What the program does',
+                    epilog='Text at the bottom of help')
+    parser.add_argument('-r', '--results', help="Folder containing the benchmark results")
+    parser.add_argument('-t', '--template', help="Folder containing the benchmark results")
+    parser.add_argument('-o', '--output', help="output html file")
+    args = parser.parse_args()
+
+    for file in pathlib.Path(args.results).glob("*.json"):
+        with open(file, "r", encoding="utf-8") as f:
+            print(f"Reading results from {file}")
+            d = json.load(f)
+
+            gitrev = d["context"]["gitrev"]
+            gitdate = d["context"]["gitdate"]
+            benchdate = dateutil.parser.isoparse(d["context"]["date"])
+            commits.append((gitrev, gitdate, benchdate))
+
+            for bench in d["benchmarks"]:
+                benchNames.append(bench["name"])
+                if bench["name"] not in benchmarks["results"]:
+                    benchmarks["results"][bench["name"]] = {}
+
+                benchmarks["results"][bench["name"]][gitrev] = {
+                    "iters": bench["iterations"],
+                    "time": bench["real_time"],
+                    "nInsn": bench.get("nInsn", 0),
+                }
+
+                if bench["time_unit"] != "ns":
+                    print("ERROR: time not in 'ns'!")
+
+    with open(args.template, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    repo = git.Repo.init("~/Projects/bpfilter")
+
+    for commit, date, _ in sorted(commits, key=lambda tup: tup[2]):
+        try:
+            message = repo.commit(commit).message
+        except:
+            message = "<Not committed yet>"
+
+        benchmarks["commits"].append(
+            {
+                "sha": commit,
+                "date": date,
+                "message": message,
+            }
+        )
+
+    benchmarks["benchNames"] = list(dict.fromkeys(benchNames))
+
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(html.replace("{{ DATA }}", json.dumps(benchmarks)))
+
+
+if __name__ == '__main__':
+    main()
