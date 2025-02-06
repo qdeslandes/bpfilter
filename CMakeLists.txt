@@ -47,9 +47,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/output/sbin)
 add_library(bf_global_flags INTERFACE)
 target_compile_options(bf_global_flags
     INTERFACE
-        -std=gnu17 -Wall -Wextra -fPIC
-        $<$<CONFIG:debug>:-O0 -g3 -ggdb -fno-omit-frame-pointer -fsanitize=address -fsanitize=undefined>
-        $<$<CONFIG:release>:-O2>
+        -std=gnu17 -Wall -Wextra -fPIC -fno-omit-frame-pointer
+        $<$<CONFIG:debug>:-O0 -g3 -ggdb -fsanitize=address -fsanitize=undefined>
+        $<$<CONFIG:release>:-O2 -g>
 )
 target_link_options(bf_global_flags
     INTERFACE

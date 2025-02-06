@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+import argparse
+import os
+import subprocess
+import time
+import signal
+from subprocess import Popen, run
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+                    prog='perfrecord',
+                    description='Profile bpfilter using perf')
+    parser.add_argument('-s', '--sourcedir', type=str, default=".", help="Path to the source directory")
+    parser.add_argument('-b', '--builddir', type=str, default=".", help="Path to the build directory")
+    parser.add_argument('-o', '--output', type=str, default="perf.data", help="Output file")
+    parser.add_argument('--tmp-output', type=str, default="perf.data.tmp", help="Temporary performance data")
+    args = parser.parse_args()
+
+    # Start bpfilter
+    bf_process = Popen([
+      'perf',
+      'record',
+      '--output', args.tmp_output,
+      '-g',
+      '-F', 'max',
+      f"{os.path.join(args.builddir, 'output', 'sbin', 'bpfilter')}",
+      '--transient',
+      '--no-iptables',
+      '--no-nftables'
+    ])
+
+    time.sleep(.5)
+
+    # Run the benchmark
+    run([
+      f"{os.path.join(args.builddir, 'output', 'sbin', 'benchmark_bin')}",
+      '--cli', f"{os.path.join(args.builddir, 'output', 'sbin', 'bfcli')}",
+      '--daemon', f"{os.path.join(args.builddir, 'output', 'sbin', 'bpfilter')}",
+      '--srcdir', args.sourcedir,
+      '--outfile', f"{os.path.join(args.builddir, 'perf_bench_results.json')}",
+      '--no-daemon',
+    ])
+
+    # Kill the daemon
+    bf_process.send_signal(signal.SIGINT)
+
+    time.sleep(.5)
+
+    with open(args.output, 'w') as f:
+      run([
+        'perf',
+        'script',
+        '-i', args.tmp_output,
+        '-F',
+        '+pid'
+      ], stdout=f)
+
+    sudo = os.getenv('SUDO_USER')
+    if sudo:
+      print(f"perfrecord started with 'sudo', changing output file ownersip to '{sudo}'")
+      os.chown(args.output, int(os.getenv('SUDO_UID')), int(os.getenv('SUDO_GID')))
+
+    os.unlink(args.tmp_output)
+
+if __name__ == "__main__":
+    main()
