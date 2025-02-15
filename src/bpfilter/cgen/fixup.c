@@ -59,6 +59,7 @@ static const char *_bf_fixup_func_to_str(enum bf_fixup_func func)
 {
     static const char *str[] = {
         [BF_FIXUP_FUNC_UPDATE_COUNTERS] = "BF_FIXUP_FUNC_UPDATE_COUNTERS",
+        [BF_FIXUP_FUNC_PARSE_IPV6_EH] = "BF_FIXUP_FUNC_PARSE_IPV6_EH",
     };
 
     bf_assert(0 <= func && func < _BF_FIXUP_FUNC_MAX);

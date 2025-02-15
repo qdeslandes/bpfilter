@@ -197,37 +197,61 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l3_hdr)));
 
-    /* Unsupported L3 protocols have been filtered out at the beginning of this
-     * function and would jump over the block below, so there is no need to
-     * worry about them here. */
     {
-        _cleanup_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_7);
+        // Process IPv4 header
+        _cleanup_bf_jmpctx_ struct bf_jmpctx _ =
+            bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
 
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
-                          BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0),
-                          BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f),
-                          BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2),
-                          BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                      BF_PROG_CTX_OFF(l3_offset)),
-                          BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2),
-                          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
-                                      BF_PROG_CTX_OFF(l4_offset)),
-                          BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
-                                      offsetof(struct iphdr, protocol)));
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
-                          BPF_MOV64_IMM(BPF_REG_1, sizeof(struct ipv6hdr)),
-                          BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                      BF_PROG_CTX_OFF(l3_offset)),
-                          BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2),
-                          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
-                                      BF_PROG_CTX_OFF(l4_offset)),
-                          BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
-                                      offsetof(struct ipv6hdr, nexthdr)));
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
+        EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
+        EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset)));
+        EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(l4_offset)));
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0, offsetof(struct iphdr, protocol)));
+    }
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+    {
+        // Process IPv6 header
+        _cleanup_bf_jmpctx_ struct bf_jmpctx _ =
+            bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
+
+        // Create argument in the scratch area
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0, offsetof(struct ipv6hdr, nexthdr)));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset)));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, sizeof(struct ipv6hdr)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1, BPF_PROG_CTX_OFF(l3_offset)));
+
+        //EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
+        //EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(dynptr)));
+        //EMIT(program, BPF_MOV64_REG(BPF_REG_2, BPF_REG_10));
+        //EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, BF_PROG_SCR_OFF(0)));
+
+        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFFF));
+        EMIT_FIXUP_CALL(program, BF_FIXUP_FUNC_PARSE_IPV6_EH);
+        {
+            _cleanup_bf_jmpctx_ struct bf_jmpctx _ =
+                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
+
+            // Update the error counter
+            EMIT(program, BPF_MOV32_IMM(BPF_REG_1, program->num_counters - 1));
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10,
+                                      BF_PROG_CTX_OFF(pkt_size)));
+            EMIT_FIXUP_CALL(program, BF_FIXUP_FUNC_UPDATE_COUNTERS);
+
+            if (bf_opts_is_verbose(BF_VERBOSE_BPF))
+                EMIT_PRINT(program, "failed to parse IPv6 EH");
+
+            EMIT(program,
+                 BPF_MOV64_IMM(BPF_REG_0, program->runtime.ops->get_verdict(
+                                              BF_VERDICT_ACCEPT)));
+            EMIT(program, BPF_EXIT_INSN());
+        }
+
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_10, BF_PROG_SCR_OFF(0)));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_10, BF_PROG_SCR_OFF(4)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(l4_offset)));
     }
 
     return 0;

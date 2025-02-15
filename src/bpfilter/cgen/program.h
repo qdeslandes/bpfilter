@@ -111,6 +111,7 @@
 /** Convenience macro to get the offset of a field in @ref
  * bf_program_context based on the frame pointer in @c BPF_REG_10 .
  */
+#define BF_PROG_CTX_OFFF (-(int)sizeof(struct bf_program_context))
 #define BF_PROG_CTX_OFF(field)                                                 \
     (-(int)sizeof(struct bf_program_context) +                                 \
      (int)offsetof(struct bf_program_context, field))

@@ -28,6 +28,7 @@ enum bf_fixup_insn
 enum bf_fixup_func
 {
     BF_FIXUP_FUNC_UPDATE_COUNTERS,
+    BF_FIXUP_FUNC_PARSE_IPV6_EH,
     _BF_FIXUP_FUNC_MAX,
 };
 

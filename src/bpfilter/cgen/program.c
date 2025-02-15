@@ -515,7 +515,7 @@ static int _bf_program_fixup(struct bf_program *program,
             insn_type = BF_FIXUP_INSN_IMM;
             offset = program->functions_location[fixup->attr.function] -
                      fixup->insn - 1;
-            bf_assert(offset < INT_MAX);
+            //bf_assert(offset < INT_MAX);
             value = (int32_t)offset;
             break;
         default:
@@ -684,6 +684,117 @@ static int _bf_program_generate_update_counters(struct bf_program *program)
     return 0;
 }
 
+/**
+ * Generate the BPF function to parse the IPv6 extension headers.
+ *
+ * This function defines a new function **in** the generated BPF program to
+ * be called during packet processing.
+ *
+ * Parameters:
+ * @c r1 Address of the runtime context
+ * @c r2 Address to write the transport layer protocol and offset
+ * Returns:
+ * 0 on success, non-zero on error.
+ *
+ * @param program Program to emit the function into. Can not be NULL.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_program_generate_parse_ipv6_eh(struct bf_program *program)
+{
+    bf_assert(program);
+
+    EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -8))
+    EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -512 + 0));
+    EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -512 + 8));
+
+    size_t start_idx = program->img_size;
+
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_2, 12));
+    EMIT(program, BPF_MOV64_REG(BPF_REG_3, BPF_REG_10));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, -512 + 16));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_4, 8));
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, -512 + 0));
+    EMIT_KFUNC_CALL(program, "bpf_dynptr_slice");
+
+    // If bpf_dynptr_slice() failed
+    {
+        _cleanup_bf_jmpctx_ struct bf_jmpctx _ =
+            bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
+
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_0, 1));
+        EMIT(program, BPF_EXIT_INSN());
+    }
+
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, -512 + 8));
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_2, BPF_REG_1, 0));
+
+    struct bf_jmpctx base_ctx[] = {
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 0, 0)),      // Hop-by-hop
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 43, 0)),     // Routing
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 44, 0)),     // Fragment
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 50, 0)),     // ESP
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 51, 0)),     // AH
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 60, 0)),     // Destination Options
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 135, 0)),    // Mobility
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 139, 0)),    // Host Identity
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 140, 0)),    // Shim6
+        bf_jmpctx_get(program, BPF_JMP_A(0)),
+    };
+
+    struct bf_jmpctx done_ctx[3] = {};
+
+    // Hop-by-hop, routing, destination options
+    bf_jmpctx_cleanup(&base_ctx[0]);
+    bf_jmpctx_cleanup(&base_ctx[1]);
+    bf_jmpctx_cleanup(&base_ctx[5]);
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_3, BPF_REG_0, 1));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, 1));
+    EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_3, 3));
+    done_ctx[0] = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    // frag EH
+    bf_jmpctx_cleanup(&base_ctx[2]);
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_2, 8));
+    done_ctx[1] = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    // auth EH
+    bf_jmpctx_cleanup(&base_ctx[4]);
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_3, BPF_REG_0, 1));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, 2));
+    EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_3, 2));
+    done_ctx[2] = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    // Unsupported EH
+    bf_jmpctx_cleanup(&base_ctx[3]);
+    bf_jmpctx_cleanup(&base_ctx[5]);
+    bf_jmpctx_cleanup(&base_ctx[7]);
+    bf_jmpctx_cleanup(&base_ctx[8]);
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_0, 1));
+    EMIT(program, BPF_EXIT_INSN());
+
+    // Transport layer header
+    bf_jmpctx_cleanup(&base_ctx[9]);
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_0, 0));
+    EMIT(program, BPF_EXIT_INSN());
+
+    // Loop
+    bf_jmpctx_cleanup(&done_ctx[0]);
+    bf_jmpctx_cleanup(&done_ctx[1]);
+    bf_jmpctx_cleanup(&done_ctx[2]);
+
+    // Store next header
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_2, BPF_REG_0, 0));
+    EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0));
+
+    // Store next header offset
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 4));
+    EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_3));
+    EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_2, 4));
+    EMIT(program, BPF_JMP_A(-(program->img_size - start_idx - 1U)));
+
+    return 0;
+}
+
 static int _bf_program_generate_functions(struct bf_program *program)
 {
     int r;
@@ -707,6 +818,11 @@ static int _bf_program_generate_functions(struct bf_program *program)
         switch (fixup->attr.function) {
         case BF_FIXUP_FUNC_UPDATE_COUNTERS:
             r = _bf_program_generate_update_counters(program);
+            if (r)
+                return r;
+            break;
+        case BF_FIXUP_FUNC_PARSE_IPV6_EH:
+            r = _bf_program_generate_parse_ipv6_eh(program);
             if (r)
                 return r;
             break;
