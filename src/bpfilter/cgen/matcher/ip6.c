@@ -36,6 +36,10 @@ static int _bf_matcher_generate_ip6_addr(struct bf_program *program,
                         offsetof(struct ipv6hdr, saddr) :
                         offsetof(struct ipv6hdr, daddr);
 
+    EMIT_PRINT(program, "    in _bf_matcher_generate_ip6_addr()");
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_6, offset));
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_4, BPF_REG_6, offset + 8));
+    EMIT_PRINT(program, "        IPv6 address is %llx %llx");
     EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_6, offset));
     EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_6, offset + 8));
 
@@ -95,6 +99,7 @@ static int _bf_matcher_generate_ip6_addr(struct bf_program *program,
         EMIT(program, BPF_ALU64_REG(BPF_OR, BPF_REG_3, BPF_REG_4));
         EMIT_FIXUP_JMP_NEXT_RULE(program,
                                  BPF_JMP_REG(BPF_JNE, BPF_REG_2, BPF_REG_3, 0));
+        EMIT_PRINT(program, "        Matched!");
     } else {
         /* If we want to *not* match an IP, none of addr->addr[0] and
          * addr->addr[1] should match the packet, otherwise we jump to the
@@ -160,9 +165,13 @@ int bf_matcher_generate_ip6(struct bf_program *program,
 {
     int r;
 
+    EMIT_PRINT(program, "==> bf_matcher_generate_ip6()");
+    EMIT(program, BPF_MOV64_REG(BPF_REG_3, BPF_REG_7));
+    EMIT_PRINT(program, "    bf_matcher_generate_ip6(): L3 header type %x");
     EMIT_FIXUP_JMP_NEXT_RULE(
         program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
+    EMIT_PRINT(program, "    bf_matcher_generate_ip6(): IPv6 confirmed");
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, BF_PROG_CTX_OFF(l3_hdr)));
 

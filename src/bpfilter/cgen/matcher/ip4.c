@@ -33,6 +33,10 @@ _bf_matcher_generate_ip4_addr_unique(struct bf_program *program,
                         offsetof(struct iphdr, saddr) :
                         offsetof(struct iphdr, daddr);
 
+    EMIT(program, BPF_MOV32_IMM(BPF_REG_3, addr->addr));
+    EMIT(program, BPF_MOV32_IMM(BPF_REG_4, addr->mask));
+
+    EMIT_PRINT(program, "rule: addr=%x mask=%x r=");
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6, offset));
     EMIT(program, BPF_MOV32_IMM(BPF_REG_2, addr->addr));
 
@@ -46,6 +50,7 @@ _bf_matcher_generate_ip4_addr_unique(struct bf_program *program,
         program, BPF_JMP_REG(matcher->op == BF_MATCHER_EQ ? BPF_JNE : BPF_JEQ,
                              BPF_REG_1, BPF_REG_2, 0));
 
+    EMIT_PRINT(program, "solved");
     return 0;
 }
 

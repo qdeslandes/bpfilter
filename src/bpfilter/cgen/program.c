@@ -746,6 +746,8 @@ static int _bf_program_generate_rule(struct bf_program *program,
         };
     }
 
+    EMIT_PRINT(program, "        Matched!");
+
     if (rule->counters) {
         EMIT(program, BPF_MOV32_IMM(BPF_REG_1, rule->index));
         EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10,
@@ -1019,6 +1021,11 @@ int bf_program_generate(struct bf_program *program)
     r = program->runtime.ops->gen_inline_epilogue(program);
     if (r)
         return r;
+
+    bf_info("Possible values are {%d, %d}", bf_flavor_ops_get(program->hook)->get_verdict(BF_VERDICT_ACCEPT),
+    bf_flavor_ops_get(program->hook)->get_verdict(BF_VERDICT_DROP));
+
+    EMIT_PRINT(program, "going to default return value");
 
     // Call the update counters function
     EMIT(program, BPF_MOV32_IMM(BPF_REG_1, bf_list_size(&chain->rules)));

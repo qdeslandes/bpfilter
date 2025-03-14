@@ -26,7 +26,7 @@
 int bf_test_daemon_init(struct bf_test_daemon *daemon, const char *path,
                         uint32_t options)
 {
-    char *args[__builtin_ctz(_BF_TEST_DAEMON_LAST) + 1] = {};
+    char *args[__builtin_ctz(_BF_TEST_DAEMON_LAST) + 5] = {};
     size_t nargs = 0;
 
     bf_assert(daemon);
@@ -39,6 +39,11 @@ int bf_test_daemon_init(struct bf_test_daemon *daemon, const char *path,
         args[nargs++] = "--no-iptables";
     if (options & BF_TEST_DAEMON_NO_NFTABLES)
         args[nargs++] = "--no-nftables";
+
+    args[nargs++] = "--verbose";
+    args[nargs++] = "debug";
+    args[nargs++] = "--verbose";
+    args[nargs++] = "bpf";
 
     return bf_test_process_init(&daemon->process, path, args, nargs);
 }

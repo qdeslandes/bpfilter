@@ -54,4 +54,4 @@ int bf_test_prog_open(struct bf_test_prog *prog, const char *name);
  *   from @p expect.
  */
 int bf_test_prog_run(const struct bf_test_prog *prog, uint32_t expect,
-                     const struct bf_test_packet *pkt);
+    const void *pkt, size_t pkt_len, const void *ctx, size_t ctx_size);

@@ -101,22 +101,34 @@ int bf_test_prog_open(struct bf_test_prog *prog, const char *name)
     return -ENOENT;
 }
 
+#include "core/bpf.h"
+
 int bf_test_prog_run(const struct bf_test_prog *prog, uint32_t expect,
-                     const struct bf_test_packet *pkt)
+                     const void *pkt, size_t pkt_len, const void *ctx, size_t ctx_size)
 {
     int r;
 
     bf_assert(prog && pkt);
 
-    LIBBPF_OPTS(bpf_test_run_opts, opts, .data_in = pkt->data,
-                .data_size_in = (uint32_t)pkt->len, .repeat = 1);
+    union bpf_attr attr = {};
 
-    r = bpf_prog_test_run_opts(prog->fd, &opts);
-    if (r < 0)
+    attr.test.prog_fd = prog->fd;
+    attr.test.data_size_in = pkt_len;
+    attr.test.data_in = ((unsigned long long)(pkt));
+    attr.test.repeat = 1;
+
+    if (ctx_size) {
+        bf_info("Using custom context");
+        attr.test.ctx_size_in = ctx_size;
+        attr.test.ctx_in = ((unsigned long long)(ctx));
+    }
+
+    r = bf_bpf(BPF_PROG_TEST_RUN, &attr);
+    if (r)
         return bf_err_r(r, "failed to run the test program");
 
-    if (opts.retval != expect) {
-        bf_err("BPF_PROG_RUN returned %u, but %u expected", opts.retval,
+    if (attr.test.retval != expect) {
+        bf_err("BPF_PROG_RUN returned %u, but %u expected", attr.test.retval,
                expect);
         return 1;
     }
