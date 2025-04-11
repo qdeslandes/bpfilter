@@ -54,6 +54,47 @@ Remove all the chains and rules defined by the daemon. Once this command complet
 
     bfcli ruleset flush
 
+``chain set``
+~~~~~~~~~~~~~
+
+``chain get``
+~~~~~~~~~~~~~
+
+``chain load``
+~~~~~~~~~~~~~~
+
+Load a chain on the system. The chain won't be attached, so the hook options will be ignored.
+
+If a chain with the same name is already loaded, use ``--update`` to update it. If a chain with the same name is already attached, you first need to remove it using ``bfcli chain flush`` or update it using ``bfcli chain set``.
+
+**Options**
+  - ``--chain CHAIN``: chain to load.
+  - ``--update``: if a chain with the same name is already loaded, update it.
+
+**Examples**
+
+``chain attach``
+~~~~~~~~~~~~~~~~
+
+Attach a loaded chain to its hook.
+
+**Options**
+  - ``--name $NAME``: name of the chain to attach.
+  - ``--ifindex $IFINDEX``: only valid for ``BF_HOOK_XDP`` and ``BF_HOOK_TC_*`` chains. Interface index to attach the chain to.
+  - ``--cgpath $PATH``: only valid for ``BF_HOOK_CGROUP_*`` chains. cgroup path to attach the chain to.
+  - ``--family $FAMILY``: only valid for ``BF_HOOK_NF_*`` chains. Packet family to attach the chain to: ``inet4`` for IPv4 or ``inet6`` for IPv6.
+  - ``--priorities $PRIO1-$PRIO2``: only valid for ``BF_HOOK_NF_*`` chains. Two priority values to use to attach the chains to the hook and update it atomically.
+
+**Examples**
+
+``chain flush``
+~~~~~~~~~~~~~~~
+
+Detach, unload, and discard an existing chain.
+
+**Options**
+  - ``--name $NAME``: name of the chain to flush.
+
 Filters definition
 ------------------
 

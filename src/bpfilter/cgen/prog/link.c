@@ -221,8 +221,6 @@ static int _bf_link_attach_nf(struct bf_link *link, enum bf_hook hook,
     };
     int r;
 
-    UNUSED(hookopts);
-
     r = bf_bpf(BPF_LINK_CREATE, &attr);
     if (r < 0)
         return r;

@@ -17,6 +17,7 @@ struct ipt_get_entries;
 struct ipt_replace;
 struct xt_counters_info;
 struct nlmsghdr;
+struct bf_hookopts;
 
 /**
  * Return the version of the library.
@@ -61,6 +62,12 @@ int bf_cli_ruleset_get(bf_list *chains, bf_list *hookopts, bf_list *counters);
 int bf_cli_ruleset_set(bf_list *chains, bf_list *hookopts);
 
 #undef bf_list
+
+int bf_cli_chain_set(struct bf_chain *chain, struct bf_hookopts *hookopts);
+int bf_cli_chain_load(struct bf_chain *chain, bool update);
+int bf_cli_chain_attach(const char *name, const struct bf_hookopts *hookopts);
+int bf_cli_chain_update(const char *name, struct bf_chain *chain);
+int bf_cli_chain_flush(const char *name);
 
 /**
  * Send iptable's ipt_replace data to bpfilter daemon.

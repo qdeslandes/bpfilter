@@ -425,7 +425,7 @@ int bf_hookopts_new_from_marsh(struct bf_hookopts **hookopts,
     if (!(child = bf_marsh_next_child(marsh, child)))
         return bf_err_r(-EINVAL, "bf_hookopts: missing priorities field");
     memcpy(&_hookopts->priorities, child->data,
-           ARRAY_SIZE(_hookopts->priorities));
+           sizeof(_hookopts->priorities));
 
     if (bf_marsh_next_child(marsh, child))
         return bf_err_r(-E2BIG, "too many serialized fields for bf_hookopts");
@@ -480,7 +480,7 @@ int bf_hookopts_marsh(const struct bf_hookopts *hookopts,
         return bf_err_r(r, "failed to marsh bf_hookopts.family");
 
     r = bf_marsh_add_child_raw(&_marsh, hookopts->priorities,
-                               ARRAY_SIZE(hookopts->priorities));
+                               sizeof(hookopts->priorities));
     if (r)
         return bf_err_r(r, "failed to marsh bf_hookopts.priorities");
 

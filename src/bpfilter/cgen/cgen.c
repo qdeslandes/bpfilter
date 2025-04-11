@@ -210,9 +210,8 @@ int bf_cgen_load(struct bf_cgen *cgen)
 
     bf_assert(cgen);
 
-    bf_info("generate and load bf_program for '%s'", cgen->chain->name);
-    if (bf_opts_is_verbose(BF_VERBOSE_DEBUG))
-        bf_cgen_dump(cgen, EMPTY_PREFIX);
+    bf_info("load %s", cgen->chain->name);
+    bf_cgen_dump(cgen, EMPTY_PREFIX);
 
     r = bf_program_new(&prog, cgen->chain);
     if (r < 0)
@@ -237,6 +236,10 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
     int r;
 
     bf_assert(cgen && ns && hookopts);
+
+    bf_info("attaching %s to %s", cgen->chain->name,
+            bf_hook_to_str(cgen->chain->hook));
+    bf_hookopts_dump(*hookopts, EMPTY_PREFIX);
 
     r = bf_ns_set(ns, bf_ctx_get_ns());
     if (r)

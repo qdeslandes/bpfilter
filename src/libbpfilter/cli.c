@@ -217,3 +217,186 @@ int bf_cli_ruleset_set(bf_list *chains, bf_list *hookopts)
 
     return response->type == BF_RES_FAILURE ? response->error : 0;
 }
+
+int bf_cli_chain_set(struct bf_chain *chain, struct bf_hookopts *hookopts)
+{
+    _cleanup_bf_request_ struct bf_request *request = NULL;
+    _cleanup_bf_response_ struct bf_response *response = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *marsh = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *chain_marsh = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *hook_marsh = NULL;
+    int r;
+
+    r = bf_marsh_new(&marsh, NULL, 0);
+    if (r)
+        return r;
+
+    r = bf_chain_marsh(chain, &chain_marsh);
+    if (r)
+        return r;
+
+    r = bf_marsh_add_child_obj(&marsh, chain_marsh);
+    if (r)
+        return r;
+
+    if (hookopts) {
+        r = bf_hookopts_marsh(hookopts, &hook_marsh);
+        if (r)
+            return r;
+
+        r = bf_marsh_add_child_obj(&marsh, hook_marsh);
+        if (r)
+            return r;
+    } else {
+        r = bf_marsh_add_child_raw(&marsh, NULL, 0);
+        if (r)
+            return r;
+    }
+
+    r = bf_request_new(&request, marsh, bf_marsh_size(marsh));
+    if (r)
+        return bf_err_r(r, "failed to create request for chain");
+
+    request->front = BF_FRONT_CLI;
+    request->cmd = BF_REQ_CHAIN_SET;
+
+    r = bf_send(request, &response);
+    if (r)
+        return bf_err_r(r, "failed to send chain to the daemon");
+
+    return response->type == BF_RES_FAILURE ? response->error : 0;
+}
+
+int bf_cli_chain_load(struct bf_chain *chain, bool update)
+{
+    _cleanup_bf_request_ struct bf_request *request = NULL;
+    _cleanup_bf_response_ struct bf_response *response = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *marsh = NULL;
+    int r;
+
+    r = bf_chain_marsh(chain, &marsh);
+    if (r)
+        return r;
+
+    r = bf_request_new(&request, marsh, bf_marsh_size(marsh));
+    if (r)
+        return bf_err_r(r, "failed to create request for chain");
+
+    request->front = BF_FRONT_CLI;
+    request->cmd = BF_REQ_CHAIN_LOAD;
+    request->chain_update = update;
+
+    r = bf_send(request, &response);
+    if (r)
+        return bf_err_r(r, "failed to send chain to the daemon");
+
+    return response->type == BF_RES_FAILURE ? response->error : 0;
+}
+
+int bf_cli_chain_attach(const char *name, const struct bf_hookopts *hookopts)
+{
+    _cleanup_bf_request_ struct bf_request *request = NULL;
+    _cleanup_bf_response_ struct bf_response *response = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *marsh = NULL;
+    int r;
+
+    r = bf_marsh_new(&marsh, NULL, 0);
+    if (r)
+        return r;
+
+    r = bf_marsh_add_child_raw(&marsh, name, strlen(name) + 1);
+    if (r)
+        return r;
+
+    {
+        _cleanup_bf_marsh_ struct bf_marsh *child = NULL;
+
+        r = bf_hookopts_marsh(hookopts, &child);
+        if (r)
+            return r;
+
+        r = bf_marsh_add_child_obj(&marsh, child);
+        if (r)
+            return r;
+    }
+
+    r = bf_request_new(&request, marsh, bf_marsh_size(marsh));
+    if (r)
+        return bf_err_r(r, "failed to create request for chain");
+
+    request->front = BF_FRONT_CLI;
+    request->cmd = BF_REQ_CHAIN_ATTACH;
+
+    r = bf_send(request, &response);
+    if (r)
+        return bf_err_r(r, "failed to send chain to the daemon");
+
+    return response->type == BF_RES_FAILURE ? response->error : 0;
+}
+
+int bf_cli_chain_update(const char *name, struct bf_chain *chain)
+{
+    _cleanup_bf_request_ struct bf_request *request = NULL;
+    _cleanup_bf_response_ struct bf_response *response = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *marsh = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *chain_marsh = NULL;
+    int r;
+
+    r = bf_marsh_new(&marsh, NULL, 0);
+    if (r)
+        return r;
+
+    r = bf_marsh_add_child_raw(&marsh, name, strlen(name) + 1);
+    if (r)
+        return r;
+
+    r = bf_chain_marsh(chain, &chain_marsh);
+    if (r)
+        return r;
+
+    r = bf_marsh_add_child_obj(&marsh, chain_marsh);
+    if (r)
+        return r;
+
+    r = bf_request_new(&request, marsh, bf_marsh_size(marsh));
+    if (r)
+        return bf_err_r(r, "failed to create request for chain");
+
+    request->front = BF_FRONT_CLI;
+    request->cmd = BF_REQ_CHAIN_UPDATE;
+
+    r = bf_send(request, &response);
+    if (r)
+        return bf_err_r(r, "failed to send chain to the daemon");
+
+    return response->type == BF_RES_FAILURE ? response->error : 0;
+}
+
+int bf_cli_chain_flush(const char *name)
+{
+    _cleanup_bf_request_ struct bf_request *request = NULL;
+    _cleanup_bf_response_ struct bf_response *response = NULL;
+    _cleanup_bf_marsh_ struct bf_marsh *marsh = NULL;
+    int r;
+
+    r = bf_marsh_new(&marsh, NULL, 0);
+    if (r)
+        return r;
+
+    r = bf_marsh_add_child_raw(&marsh, name, strlen(name) + 1);
+    if (r)
+        return r;
+
+    r = bf_request_new(&request, marsh, bf_marsh_size(marsh));
+    if (r)
+        return bf_err_r(r, "failed to create request for chain");
+
+    request->front = BF_FRONT_CLI;
+    request->cmd = BF_REQ_CHAIN_FLUSH;
+
+    r = bf_send(request, &response);
+    if (r)
+        return bf_err_r(r, "failed to send chain to the daemon");
+
+    return response->type == BF_RES_FAILURE ? response->error : 0;
+}

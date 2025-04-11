@@ -102,52 +102,77 @@ sleep 0.25
 #
 ################################################################################
 
-log "[TEST] Can't attach chain to netns iface from host"
-! bfcli ruleset set --str "chain xdp BF_HOOK_XDP{ifindex=${NS_IFINDEX}} ACCEPT rule ip4.proto icmp counter DROP" > /dev/null 2>&1 && success || failure
+log "[TEST] Set ruleset to block ping to netns, do not attach"
+bfcli ruleset set --str "chain xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
 
-log "[TEST] Can ping host iface from netns"
-ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR} > /dev/null 2>&1 && success || failure
+log "[TEST] Can ping netns iface from host"
+ping -c 1 -I ${VETH_HOST} -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
+bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
+bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[1].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
 
-log "[TEST] Attach chain to host iface"
+log "[TEST] Set ruleset to block ping to netns, attach"
 bfcli ruleset set --str "chain xdp BF_HOOK_XDP{ifindex=${HOST_IFINDEX}} ACCEPT rule ip4.proto icmp counter DROP" && success || failure
 
-log "[TEST] Can't ping host iface from netns"
-! ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR} > /dev/null 2>&1 && success || failure
-
-log "[TEST] Pings have been blocked on ingress"
-bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 1' > /dev/null 2>&1 && success || failure
-
-log "Flushing the ruleset"
-bfcli ruleset flush && success || failure
-
-log "[TEST] Can't attach chain to host iface from netns"
-! ip netns exec ${NAMESPACE} bfcli ruleset set --str "chain xdp BF_HOOK_XDP{ifindex=${HOST_IFINDEX}} ACCEPT rule ip4.proto icmp counter DROP" > /dev/null 2>&1 && success || failure
-
-log "[TEST] Can ping the netns iface from the host"
-ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1  && success || failure
-
-log "[TEST] Attach chain to the netns iface"
-ip netns exec ${NAMESPACE} bfcli ruleset set --str "chain xdp BF_HOOK_XDP{ifindex=${NS_IFINDEX}} ACCEPT rule ip4.proto icmp counter DROP" > /dev/null 2>&1 && success || failure
-
-log "[TEST] Can't ping the netns iface from the host"
+log "[TEST] Can't ping netns iface from host"
 ! ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
-
-log "[TEST] Pings have been blocked on ingress"
 bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 1' > /dev/null 2>&1 && success || failure
 
 log "Flushing the ruleset"
 bfcli ruleset flush && success || failure
 
-log "[TEST] Attach chain to the netns iface"
-ip netns exec ${NAMESPACE} bfcli ruleset set --str "chain xdp BF_HOOK_NF_LOCAL_IN{family=inet4,priorities=100-101} ACCEPT" > /dev/null 2>&1 && success || failure
+log "[TEST] Load chain to drop pings, do not attach"
+bfcli chain load --chain "chain xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
 
-log "[TEST] Pinging the host interface should not update the counters of the program in the namespace"
-ping -c 1 -W 0.25 ${HOST_IP_ADDR} > /dev/null 2>&1 && success || failure
+log "[TEST] Can't load chain with existing name"
+! bfcli chain load --chain "chain xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+
+log "[TEST] Load chain with existing name and --update"
+bfcli chain load --update --chain "chain xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+
+log "[TEST] Load chain with new name and --update"
+bfcli chain load --update --chain "chain another_xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+
+log "[TEST] Can ping netns iface from host (check for counter map for both chains)"
+ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
+bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].elements.[0].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
+bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[1].elements.[0].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
+
+log "Flushing the ruleset"
+bfcli ruleset flush && success || failure
+
+log "[TEST] Load a new XDP chain"
+bfcli chain load --update --chain "chain xdp BF_HOOK_XDP ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+
+log "[TEST] Can ping netns iface from host "
+ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
 bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
 
-log "[TEST] Pinging the namespace interface should not update the counters of the program in the namespace"
+log "[TEST] Failed to attach XDP chain, wrong ifindex"
+! bfcli chain attach --name xdp --option ifindex=9999 && success || failure
+
+log "[TEST] Can ping netns iface from host "
 ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
+bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 0' > /dev/null 2>&1 && success || failure
+
+log "[TEST] Attach XDP chain"
+bfcli chain attach --name xdp --option ifindex=${HOST_IFINDEX} && success || failure
+
+log "[TEST] Can't ping netns iface from host "
+! ping -c 1 -W 0.25 ${NS_IP_ADDR} > /dev/null 2>&1 && success || failure
 bpftool --json map dump name ${COUNTERS_MAP_NAME} | jq --exit-status '.[0].formatted.value.packets == 1' > /dev/null 2>&1 && success || failure
+
+log "[TEST] Load a new TC chain and attach it"
+bfcli chain load --update --chain "chain tc BF_HOOK_TC_INGRESS ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+bfcli chain attach --name tc --option ifindex=${HOST_IFINDEX} && success || failure
+
+log "[TEST] Load a new cgroup chain and attach it"
+bfcli chain load --update --chain "chain cgroup BF_HOOK_CGROUP_INGRESS ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+bfcli chain attach --name cgroup --option cgpath=/sys/fs/cgroup/user.slice && success || failure
+
+log "[TEST] Load a new Netfilter (INPUT) chain and attach it"
+bpftool net
+bfcli chain load --update --chain "chain netfilter BF_HOOK_NF_LOCAL_IN ACCEPT rule ip4.proto icmp counter DROP" && success || failure
+bfcli chain attach --name netfilter --option family=inet4 --option priorities=100-101 && success || failure
 
 
 ################################################################################
