@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include "bpfilter/cgen/cgen.h"
+#include "bpfilter/opts.h"
+#include "core/bpf.h"
 #include "core/chain.h"
 #include "core/dump.h"
 #include "core/front.h"
@@ -34,6 +36,9 @@ struct bf_ctx
     /// Namespaces the daemon was started in.
     struct bf_ns ns;
 
+    /// BPF token file descriptor
+    int token_fd;
+
     bf_list cgens;
 };
 
@@ -53,6 +58,7 @@ static struct bf_ctx *_bf_global_ctx = NULL;
 static int _bf_ctx_new(struct bf_ctx **ctx)
 {
     _cleanup_bf_ctx_ struct bf_ctx *_ctx = NULL;
+    const char *token_path = bf_opts_token_path();
     int r;
 
     bf_assert(ctx);
@@ -64,6 +70,13 @@ static int _bf_ctx_new(struct bf_ctx **ctx)
     r = bf_ns_init(&_ctx->ns, getpid());
     if (r)
         return bf_err_r(r, "failed to initialise current bf_ns");
+
+    _ctx->token_fd = -1;
+    if (token_path) {
+        r = bf_bpf_obj_get(token_path, 0, &_ctx->token_fd);
+        if (r)
+            return bf_err_r(r, "failed to open BPF token at %s", token_path);
+    }
 
     _ctx->cgens = bf_list_default(bf_cgen_free, bf_cgen_marsh);
 
@@ -132,6 +145,7 @@ static void _bf_ctx_free(struct bf_ctx **ctx)
         return;
 
     bf_ns_clean(&(*ctx)->ns);
+    closep(&(*ctx)->token_fd);
     bf_list_clean(&(*ctx)->cgens);
     freep((void *)ctx);
 }
@@ -162,6 +176,8 @@ static void _bf_ctx_dump(const struct bf_ctx *ctx, prefix_t *prefix)
     bf_dump_prefix_pop(prefix);
 
     bf_dump_prefix_pop(prefix);
+
+    DUMP(prefix, "token_fd: %d", ctx->token_fd);
 
     // Codegens
     DUMP(bf_dump_prefix_last(prefix), "cgens: bf_list<struct bf_cgen>[%lu]",
@@ -416,4 +432,9 @@ int bf_ctx_delete_cgen(struct bf_cgen *cgen, bool unload)
 struct bf_ns *bf_ctx_get_ns(void)
 {
     return &_bf_global_ctx->ns;
+}
+
+int bf_ctx_token(void)
+{
+    return _bf_global_ctx->token_fd;
 }

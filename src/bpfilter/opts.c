@@ -23,6 +23,7 @@ enum
     BF_OPT_NO_IPTABLES_KEY,
     BF_OPT_NO_NFTABLES_KEY,
     BF_OPT_NO_CLI_KEY,
+    BF_OPT_TOKEN_PATH,
     BF_OPT_VERSION,
 };
 
@@ -58,6 +59,9 @@ static struct bf_options
      * bpfilter is stopped, everything is cleaned up. */
     bool transient;
 
+    /** Path to the BPF token to use, if a token should be used. */
+    const char *token_path;
+
     /** Bit flags for enabled fronts. */
     uint16_t fronts;
 
@@ -67,6 +71,7 @@ static struct bf_options
     uint16_t verbose;
 } _bf_opts = {
     .transient = false,
+    .token_path = NULL,
     .fronts = 0xffff,
     .verbose = 0,
 };
@@ -83,6 +88,8 @@ static struct argp_option options[] = {
     {"no-nftables", BF_OPT_NO_NFTABLES_KEY, 0, 0, "Disable nftables support",
      0},
     {"no-cli", BF_OPT_NO_CLI_KEY, 0, 0, "Disable CLI support", 0},
+    {"bpf-token", BF_OPT_TOKEN_PATH, "TOKEN_PATH", 0,
+     "Path to the pinned BPF token to use", 0},
     {"verbose", 'v', "VERBOSE_FLAG", 0,
      "Verbose flags to enable. Can be used more than once.", 0},
     {"version", BF_OPT_VERSION, 0, 0, "Print the version and return.", 0},
@@ -120,6 +127,10 @@ static error_t _bf_opts_parser(int key, char *arg, struct argp_state *state)
     case BF_OPT_NO_CLI_KEY:
         bf_info("disabling CLI support");
         args->fronts &= ~(1 << BF_FRONT_CLI);
+        break;
+    case BF_OPT_TOKEN_PATH:
+        args->token_path = arg;
+        bf_info("using BPF token at %s", args->token_path);
         break;
     case 'v':
         opt = bf_verbose_from_str(arg);
@@ -164,6 +175,11 @@ bool bf_opts_persist(void)
 bool bf_opts_is_front_enabled(enum bf_front front)
 {
     return _bf_opts.fronts & (1 << front);
+}
+
+const char *bf_opts_token_path(void)
+{
+    return _bf_opts.token_path;
 }
 
 bool bf_opts_is_verbose(enum bf_verbose opt)

@@ -21,5 +21,6 @@ int bf_opts_init(int argc, char *argv[]);
 bool bf_opts_transient(void);
 bool bf_opts_persist(void);
 bool bf_opts_is_front_enabled(enum bf_front front);
+const char *bf_opts_token_path(void);
 bool bf_opts_is_verbose(enum bf_verbose opt);
 void bf_opts_set_verbose(enum bf_verbose opt);

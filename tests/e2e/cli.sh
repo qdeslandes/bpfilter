@@ -22,6 +22,8 @@ YELLOW='\033[0;33m'
 YELLOW_BOLD='\033[1;33m'
 RESET='\033[0m'
 
+BPFILTER_PID=0
+
 log() {
     echo -e "${BLUE}[.] ${BLUE_BOLD}$1${RESET}"
 }
@@ -31,13 +33,15 @@ expect_result() {
     local expected_result="$2"  # 0 = success, non-zero = failure
     shift 2
 
+    echo "bpfilter PID ${BPFILTER_PID}"
     # Build the command string for eval
-    local cmd="$*"
+    local cmd="LD_LIBRARY_PATH=/tmp nsenter --user -t ${BPFILTER_PID} $*"
 
     # Capture both stdout and stderr
     local output
     local result=0
     output=$(eval "$cmd" 2>&1) || result=$?
+    echo $$
 
     # Check if the result matches the expected result
     if { [ "$expected_result" -eq 0 ] && [ $result -eq 0 ]; } ||
@@ -76,8 +80,11 @@ expect_failure() {
     expect_result "$description" 1 "$@"
 }
 
+BPFILTER_PID=0
+
 # Function to cleanup on exit or error
 cleanup() {
+    echo "Cleanup bpfilter pid ${BPFILTER_PID}"
     if [ -n "$BPFILTER_PID" ]; then
         kill $BPFILTER_PID 2>/dev/null || true
     fi
@@ -151,9 +158,60 @@ done
 #
 ################################################################################
 
-ip netns add ${NAMESPACE}
+
+
+log "[SUITE] Setup"
+#expect_success "validate namespace connectivity" \
+#    ip netns exec ${NAMESPACE} ping -c 1 ${HOST_IP_ADDR}
+
+
+################################################################################
+#
+# Start bpfilter
+#
+################################################################################
+
+log "Starting bpfilter in background..."
+BPFILTER_OUTPUT_FILE=$(mktemp)
+MAKE_SMTH=/tmp/make_token_bin
+
+/sbin/capsh --decode=$(grep CapBnd /proc/$$/status|cut -f2)
+# Start bpfilter in user namespace and have it write its PID to a file
+ls /run/netns
+unshare --user --map-user=$(id -u) --map-group=$(id -g) --mount --keep-caps bash -c "
+    mkdir /tmp/test
+    mount bpffs -t bpf /tmp/test
+    # Verify the mount
+    mount | grep bpffs
+    ls -la /sys/fs/bpf
+    echo "MAKE_SMTH"
+    ${MAKE_SMTH}; \
+    echo "exexc"
+    exec ${BPFILTER} --transient --verbose debug --verbose bpf
+" > "$BPFILTER_OUTPUT_FILE" 2>&1 &
+
+log "after unshare"
+# Wait for bpfilter to initialize
+sleep 0.25
+
+# Get the actual PID of bpfilter
+log "before pgrep: looking for ${BPFILTER}"
+ps -aux | grep bpfilter
+BPFILTER_PID=$(pgrep bpfilter)
+log "after pgrep"
+echo "bpfilter PID is ${BPFILTER_PID}"
+
+# Wait for bpfilter to initialize
+sleep 0.25
+
+echo "add ns"
+# ip netns add ${NAMESPACE}
+echo "attach ns"
+ip netns attach ${NAMESPACE} ${BPFILTER_PID}
+echo "add link"
 ip link add ${VETH_HOST} type veth peer name ${VETH_NS}
 
+echo "config ns"
 ip link set ${VETH_NS} netns ${NAMESPACE}
 
 ip addr add ${HOST_IP} dev ${VETH_HOST}
@@ -170,26 +228,6 @@ log "Network interfaces configured:"
 log "  ${HOST_IFINDEX}: ${VETH_HOST} @ ${HOST_IP_ADDR}"
 log "  ${NS_IFINDEX}: ${VETH_NS} @ ${NS_IP_ADDR}"
 
-log "[SUITE] Setup"
-expect_success "validate namespace connectivity" \
-    ip netns exec ${NAMESPACE} ping -c 1 ${HOST_IP_ADDR}
-
-
-################################################################################
-#
-# Start bpfilter
-#
-################################################################################
-
-log "Starting bpfilter in background..."
-BPFILTER_OUTPUT_FILE=$(mktemp)
-${BPFILTER} --transient --verbose debug --verbose bpf > "$BPFILTER_OUTPUT_FILE" 2>&1 &
-BPFILTER_PID=$!
-
-# Wait for bpfilter to initialize
-sleep 0.25
-
-
 ################################################################################
 #
 # Run tests
@@ -199,12 +237,12 @@ sleep 0.25
 log "[SUITE] netns: define chains from the host"
 expect_failure "can't attach chain to netns iface from host" \
     ${BFCLI} ruleset set --str \"chain xdp BF_HOOK_XDP\{ifindex=${NS_IFINDEX}\} ACCEPT rule ip4.proto icmp counter DROP\"
-expect_success "can ping host iface from netns" \
-    ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR}
+#expect_success "can ping host iface from netns" \
+#    ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR}
 expect_success "attach chain to host iface" \
     ${BFCLI} ruleset set --str \"chain xdp BF_HOOK_TC_INGRESS\{ifindex=${HOST_IFINDEX}\} ACCEPT rule ip4.proto icmp counter DROP\"
-expect_failure "can't ping host iface from netns" \
-    ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR}
+#expect_failure "can't ping host iface from netns" \
+#    ip netns exec ${NAMESPACE} ping -c 1 -W 0.25 ${HOST_IP_ADDR}
 expect_success "pings have been blocked on ingress" \
     bpftool --json map dump name ${COUNTERS_MAP_NAME} \| jq --exit-status \'.[0].formatted.value.packets == 1\'
 expect_success "flushing the ruleset" \

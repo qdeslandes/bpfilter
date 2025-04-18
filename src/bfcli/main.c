@@ -154,7 +154,7 @@ int _bf_do_ruleset_get(int argc, char *argv[])
 
     return 0;
 }
-
+#include <unistd.h>
 #define BFC_COMMAND_NAME_LEN 32
 static char _bfc_command_name[BFC_COMMAND_NAME_LEN];
 
@@ -180,6 +180,8 @@ int main(int argc, char *argv[])
     argc -= argv_skip;
 
     bf_logger_setup();
+
+    bf_info("PID is %d", getpid());
 
     // If any of the arguments is --version, print the version and return.
     for (int i = 0; i < argc; ++i) {

@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "bpfilter/ctx.h"
 #include "core/bpf.h"
 #include "core/dump.h"
 #include "core/helper.h"
@@ -328,6 +329,11 @@ int bf_map_create(struct bf_map *map, uint32_t flags)
     attr.value_size = map->value_size;
     attr.max_entries = map->n_elems;
     attr.map_flags = flags;
+
+    if (bf_ctx_token() != -1) {
+        //attr.map_flags |= BPF_F_TOKEN_FD;
+        //attr.map_token_fd = bf_ctx_token();
+    }
 
     /** The BTF data is not mandatory to use the map, but a good addition.
      * Hence, bpfilter will try to make the BTF data available, but will

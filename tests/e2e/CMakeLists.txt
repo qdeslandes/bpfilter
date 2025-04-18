@@ -2,6 +2,8 @@
 # Copyright (c) 2023 Meta Platforms, Inc. and affiliates.
 
 find_package(Python3 COMPONENTS Interpreter)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(bpf REQUIRED IMPORTED_TARGET libbpf)
 
 add_custom_command(
     COMMAND
@@ -38,6 +40,17 @@ target_link_libraries(e2e_bin
         libbpfilter
 )
 
+add_executable(setup_token_bin EXCLUDE_FROM_ALL
+    ${CMAKE_CURRENT_SOURCE_DIR}/make_token.c
+)
+
+target_link_libraries(setup_token_bin
+    PRIVATE
+        bf_global_flags
+        core
+        PkgConfig::bpf
+)
+
 add_custom_target(e2e
     COMMAND
         ${CMAKE_SOURCE_DIR}/tools/asroot
@@ -49,8 +62,9 @@ add_custom_target(e2e
                 --bpfilter $<TARGET_FILE:bpfilter>
                 --bfcli $<TARGET_FILE:bfcli>
     DEPENDS
-        e2e_bin
         bpfilter
         bfcli
+        e2e_bin
+        setup_token_bin
     COMMENT "Running end-to-end tests"
 )
