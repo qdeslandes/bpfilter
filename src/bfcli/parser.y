@@ -83,6 +83,7 @@
 %token <sval> MATCHER_PORT MATCHER_PORT_RANGE
 %token <sval> MATCHER_ICMP
 %token <sval> STRING
+%token <sval> RAW_PAYLOAD
 %token <sval> HOOK VERDICT MATCHER_TYPE MATCHER_OP MATCHER_TCP_FLAGS
 %token <sval> RAW_HOOKOPT
 
@@ -275,118 +276,15 @@ matcher         : matcher_type matcher_op MATCHER_META_IFINDEX
 
                     $$ = TAKE_PTR(matcher);
                 }
-                | matcher_type matcher_op MATCHER_META_L3_PROTO
+                | matcher_type matcher_op RAW_PAYLOAD
                 {
                     _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    uint16_t proto;
-
-                    if (bf_streq($3, "ipv4"))
-                        proto = ETH_P_IP;
-                    else if (bf_streq($3, "ipv6"))
-                        proto = ETH_P_IPV6;
-                    else
-                        bf_parse_err("unsupported L3 protocol to match '%s'\n", $3);
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &proto, sizeof(proto)) < 0)
-                        bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_META_L4_PROTO
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    uint8_t proto;
-
-                    if (bf_streq($3, "icmp"))
-                        proto = IPPROTO_ICMP;
-                    else if (bf_streq($3, "tcp"))
-                        proto = IPPROTO_TCP;
-                    else if (bf_streq($3, "udp"))
-                        proto = IPPROTO_UDP;
-                    else if (bf_streq($3, "icmpv6"))
-                        proto = IPPROTO_ICMPV6;
-                    else
-                        bf_parse_err("unsupported L4 protocol to match '%s'\n", $3);
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &proto, sizeof(proto)) < 0)
-                        bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_META_PROBA
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    long raw_val;
-                    uint8_t proba;
-
-                    raw_val = atol($3);
-                    if (raw_val < 0 || 100 < raw_val)
-                        bf_parse_err("invalid meta.probability value: %s\n", $3);
-
-                    proba = (uint8_t)raw_val;
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &proba, sizeof(proba)))
-                        bf_parse_err("failed to create new matcher\n");
-
-                    bf_matcher_dump(matcher, EMPTY_PREFIX);
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_IP_PROTO
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    uint8_t proto;
-
-                    if (bf_streq($3, "icmp"))
-                        proto = IPPROTO_ICMP;
-                    else
-                        bf_parse_err("unsupported ip4.proto value '%s'\n", $3);
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &proto, sizeof(proto)) < 0)
-                        bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_IPADDR
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    struct bf_matcher_ip4_addr addr;
-                    char *mask;
+                    _cleanup_free_ char *raw_payload = $3;
                     int r;
 
-                    // If '/' is found, parse the mask, otherwise use /32.
-                    mask = strchr($3, '/');
-                    if (mask) {
-                        *mask = '\0';
-                        ++mask;
-
-                        int m = atoi(mask);
-                        if (m == 0)
-                            bf_parse_err("failed to parse IPv4 mask: %s\n", mask);
-
-                        addr.mask = ((uint32_t)~0) << (32 - m);
-                        addr.mask = htobe32(addr.mask);
-                    } else {
-                        addr.mask = (uint32_t)~0;
-                    }
-
-                    // Convert the IPv4 from string to uint32_t.
-                    r = inet_pton(AF_INET, $3, &addr.addr);
-                    if (r != 1)
-                        bf_parse_err("failed to parse IPv4 adddress: %s\n", $3);
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &addr, sizeof(addr)))
-                        bf_parse_err("failed to create a new matcher\n");
+                    r = bf_matcher_new_from_raw(&matcher, $1, $2, raw_payload);
+                    if (r)
+                        bf_parse_err("failed to create matcher from raw");
 
                     $$ = TAKE_PTR(matcher);
                 }
@@ -508,43 +406,6 @@ matcher         : matcher_type matcher_op MATCHER_META_IFINDEX
 
                     $$ = TAKE_PTR(matcher);
                 }
-                | matcher_type matcher_op MATCHER_IP6_ADDR
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    struct bf_matcher_ip6_addr addr = {};
-                    char *mask_str;
-                    int mask = 128;
-                    int r;
-
-                    // If '/' is found, parse the mask, otherwise use /128.
-                    mask_str = strchr($3, '/');
-                    if (mask_str) {
-                        *mask_str = '\0';
-                        ++mask_str;
-
-                        mask = atoi(mask_str);
-                        if (mask == 0)
-                            bf_parse_err("failed to parse IPv6 mask: %s", mask_str);
-                    }
-
-                    for (int i = 0; i < mask / 8; ++i)
-                        addr.mask[i] = (uint8_t)0xff;
-
-                    if (mask % 8)
-                        addr.mask[mask / 8] = (uint8_t)0xff << (8 - mask % 8);
-
-                    // Convert the IPv6 from string to uint64_t[2].
-                    r = inet_pton(AF_INET6, $3, addr.addr);
-                    if (r != 1)
-                        bf_parse_err("failed to parse IPv6 adddress: %s\n", $3);
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &addr, sizeof(addr)))
-                        bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
                 | matcher_type matcher_op MATCHER_IP6_NET
                 {
                     _free_bf_matcher_ struct bf_matcher *matcher = NULL;
@@ -605,105 +466,6 @@ matcher         : matcher_type matcher_op MATCHER_META_IFINDEX
 
                     if (bf_matcher_new(&matcher, $1, $2, &set_id, sizeof(set_id)))
                         bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_PORT
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    long raw_val;
-                    uint16_t port;
-
-                    raw_val = atol($3);
-                    if (raw_val <= 0 || USHRT_MAX < raw_val)
-                        bf_parse_err("invalid port value: %s\n", $3);
-
-                    port = (uint16_t)raw_val;
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &port, sizeof(port)))
-                        bf_parse_err("failed to create new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_PORT_RANGE
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    long raw_val;
-                    char *end_port_str;
-                    uint16_t ports[2];
-
-                    end_port_str = strchr($3, '-');
-                    *end_port_str = '\0';
-                    ++end_port_str;
-
-                    raw_val = atol($3);
-                    if (raw_val < 0 || USHRT_MAX < raw_val)
-                        bf_parse_err("invalid port value: %s\n", $3);
-                    ports[0] = (uint16_t)raw_val;
-
-                    raw_val = atol(end_port_str);
-                    if (raw_val < 0 || USHRT_MAX < raw_val)
-                        bf_parse_err("invalid port value: %s\n", end_port_str);
-                    ports[1] = (uint16_t)raw_val;
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, ports, sizeof(ports)))
-                        bf_parse_err("failed to create new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_TCP_FLAGS
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    uint8_t flags = 0;
-                    char *flags_str;
-                    char *saveptr;
-                    char *token;
-                    int r;
-
-                    for (flags_str = $3; ; flags_str = NULL) {
-                        enum bf_matcher_tcp_flag flag;
-
-                        token = strtok_r(flags_str, ",", &saveptr);
-                        if (!token)
-                            break;
-
-                        r = bf_matcher_tcp_flag_from_str(token, &flag);
-                        if (r) {
-                            bf_parse_err("Unknown TCP flag '%s', ignoring\n", token);
-                            continue;
-                        }
-
-                        flags |= BF_FLAG(flag);
-                    }
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &flags, sizeof(flags)))
-                        bf_parse_err("failed to create a new matcher\n");
-
-                    $$ = TAKE_PTR(matcher);
-                }
-                | matcher_type matcher_op MATCHER_ICMP
-                {
-                    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
-                    long raw_val;
-                    uint8_t value;
-
-                    raw_val = atol($3);
-                    if (raw_val < 0 || UINT8_MAX < raw_val)
-                        bf_parse_err("invalid %s value: %s\n",
-                                     bf_matcher_type_to_str($1), $3);
-
-                    value = (uint8_t)raw_val;
-
-                    free($3);
-
-                    if (bf_matcher_new(&matcher, $1, $2, &value, sizeof(value)))
-                        bf_parse_err("failed to create new matcher\n");
 
                     $$ = TAKE_PTR(matcher);
                 }

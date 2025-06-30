@@ -177,6 +177,22 @@ struct bf_matcher
 };
 
 /**
+ * @brief Convert an IP protocol number to a string.
+ *
+ * @param proto IP protocol as a number.
+ * @return IP protocol string correspondig to `proto`, or NULL if not found.
+ */
+const char *bf_ipproto_to_str(uint8_t proto);
+
+/**
+ * @brief Convert an IP protocol name to a number.
+ *
+ * @param str IP protocol as a string.
+ * @return IP protocol number correspondig to `str`, or NULL if not found.
+ */
+int bf_ipproto_from_str(const char *str, uint8_t *v);
+
+/**
  * Allocate and initalise a new matcher.
  *
  * @param matcher Matcher object to allocate and initialise. Can't be NULL. On
@@ -192,6 +208,10 @@ struct bf_matcher
 int bf_matcher_new(struct bf_matcher **matcher, enum bf_matcher_type type,
                    enum bf_matcher_op op, const void *payload,
                    size_t payload_len);
+
+int bf_matcher_new_from_raw(struct bf_matcher **matcher,
+                            enum bf_matcher_type type, enum bf_matcher_op op,
+                            char *payload);
 
 /**
  * Allocate a new matcher and initialise it from serialised data.
@@ -279,3 +299,31 @@ const char *bf_matcher_tcp_flag_to_str(enum bf_matcher_tcp_flag flag);
  */
 int bf_matcher_tcp_flag_from_str(const char *str,
                                  enum bf_matcher_tcp_flag *flag);
+
+struct bf_matcher_ops_parse_meta
+{
+    int (*map_u8)(const char *, uint8_t *v);
+    int (*map_u16)(const char *, uint16_t *v);
+};
+
+struct bf_matcher_ops_print_meta
+{
+    const char *(*map_u8)(uint8_t v);
+    const char *(*map_u16)(uint16_t v);
+};
+
+typedef int (*parse_cb)(void *payload, char *str, struct bf_matcher_ops_parse_meta *meta);
+typedef void (*print_cb)(const void *payload, struct bf_matcher_ops_print_meta *meta);
+
+struct bf_matcher_ops
+{
+    size_t payload_size;
+    parse_cb parse;
+    struct bf_matcher_ops_parse_meta parse_meta;
+
+    print_cb print;
+    struct bf_matcher_ops_print_meta print_meta;
+};
+
+struct bf_matcher_ops *bf_matcher_ops_get(enum bf_matcher_type type,
+                                          enum bf_matcher_op op);

@@ -60,9 +60,9 @@ BF_HOOK_[A-Z_]+ { BEGIN(STATE_HOOK_OPTS); yylval.sval = strdup(yytext); return H
 meta\.ifindex  { BEGIN(STATE_MATCHER_META_IFINDEX); yylval.sval = strdup(yytext); return MATCHER_TYPE; }
 <STATE_MATCHER_META_IFINDEX>{
     (eq) { yylval.sval = strdup(yytext); return MATCHER_OP; }
-    [0-9]+ {
+    [0-9a-zA-Z]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_META_IFINDEX;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -71,7 +71,7 @@ meta\.l3_proto  { BEGIN(STATE_MATCHER_META_L3_PROTO); yylval.sval = strdup(yytex
     (eq) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     [a-z0-9]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_META_L3_PROTO;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -80,7 +80,7 @@ meta\.l4_proto  { BEGIN(STATE_MATCHER_META_L4_PROTO); yylval.sval = strdup(yytex
     (eq) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     [a-z0-9]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_META_L4_PROTO;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -89,7 +89,7 @@ meta\.probability  { BEGIN(STATE_MATCHER_META_PROBA); yylval.sval = strdup(yytex
     (eq) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     (-)?[0-9]+% {
         yylval.sval = strdup(yytext);
-        return MATCHER_META_PROBA;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -98,7 +98,7 @@ ip4\.proto      { BEGIN(STATE_MATCHER_IP_PROTO); yylval.sval = strdup(yytext); r
     (eq|not) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     [a-z]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_IP_PROTO;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -108,7 +108,7 @@ ip4\.daddr       { BEGIN(STATE_MATCHER_IPADDR); yylval.sval = strdup(yytext); re
     (eq|not|in) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\/[0-9]+)? {
         yylval.sval = strdup(yytext);
-        return MATCHER_IPADDR;
+        return RAW_PAYLOAD;
     }
     \{([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3},?)+\} {
         yylval.sval = strdup(yytext);
@@ -134,7 +134,7 @@ ip6\.(s|d)addr      { BEGIN(STATE_MATCHER_IP6_ADDR); yylval.sval = strdup(yytext
          * regex for IPv6 detection, it will be validated by inet_pton()
          * anyway! */
         yylval.sval = strdup(yytext);
-        return MATCHER_IP6_ADDR;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -155,20 +155,20 @@ udp\.(s|d)port  { BEGIN(STATE_MATCHER_PORT); yylval.sval = strdup(yytext); retur
     (eq|not|range) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     (\!)?[0-9]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_PORT;
+        return RAW_PAYLOAD;
     }
     [0-9]+-[0-9]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_PORT_RANGE;
+        return RAW_PAYLOAD;
     }
 }
 
 icmp(v6)?\.(code|type) { BEGIN(STATE_MATCHER_ICMP); yylval.sval = strdup(yytext); return MATCHER_TYPE; }
 <STATE_MATCHER_ICMP>{
     (eq|not) { yylval.sval = strdup(yytext); return MATCHER_OP; }
-    (\!)?[0-9]+ {
+    [0-9a-zA-Z\-]+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_ICMP;
+        return RAW_PAYLOAD;
     }
 }
 
@@ -177,7 +177,7 @@ tcp\.flags      { BEGIN(STATE_MATCHER_TCP_FLAGS); yylval.sval = strdup(yytext); 
     (eq|not|any|all) { yylval.sval = strdup(yytext); return MATCHER_OP; }
     ([A-Z]+,?)+ {
         yylval.sval = strdup(yytext);
-        return MATCHER_TCP_FLAGS;
+        return RAW_PAYLOAD;
     }
 }
 

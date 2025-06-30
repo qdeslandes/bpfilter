@@ -128,3 +128,41 @@ Test(matcher, can_get_str_from_matcher_op)
     for (int i = 0; i < _BF_MATCHER_OP_MAX; ++i)
         assert_non_null(bf_matcher_op_to_str(i));
 }
+
+int bft_parse(const char *type, const char *op, const char *payload)
+{
+    _free_bf_matcher_ struct bf_matcher *matcher = NULL;
+    enum bf_matcher_type _type;
+    enum bf_matcher_op _op;
+    int r;
+
+    r = bf_matcher_type_from_str(type, &_type);
+    if (r)
+        return bf_err_r(r, "matcher type '%s' not found", type);
+
+    r = bf_matcher_op_from_str(op, &_op);
+    if (r)
+        return bf_err_r(r, "matcher op '%s' not found", op);
+
+    r = bf_matcher_new_from_raw(&matcher, _type, _op, payload);
+    if (r)
+        return r;
+
+    return 0;
+}
+
+Test(matcher, parse_ip4_proto)
+{
+    // ip4.proto eq protocol name
+    assert_success(bft_parse("ip4.proto", "eq", "tcp"));
+    assert_success(bft_parse("ip4.proto", "eq", "TCP"));
+    assert_error(bft_parse("ip4.proto", "eq", "fakeproto"));
+    assert_error(bft_parse("ip4.proto", "eq", ""));
+
+    // ip4.proto eq protocol value
+    assert_success(bft_parse("ip4.proto", "eq", "21"));
+    assert_success(bft_parse("ip4.proto", "eq", "021"));
+    assert_success(bft_parse("ip4.proto", "eq", "0x21"));
+    assert_error(bft_parse("ip4.proto", "eq", "-32"));
+    assert_error(bft_parse("ip4.proto", "eq", "1500"));
+}

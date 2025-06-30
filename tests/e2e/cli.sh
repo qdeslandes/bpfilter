@@ -343,7 +343,7 @@ suite_netns_to_host() {
     expect_failure "can't ping ns iface from host" \
         ping -c 1 -W 0.25 ${NS_IP_ADDR}
     expect_success "pings have been blocked on ingress" \
-        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/ip4\.proto eq 0x01/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
+        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/ip4\.proto eq icmp/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
     expect_success "flushing the ruleset" \
         ${FROM_NS} ${BFCLI} ruleset flush
 }
@@ -360,7 +360,7 @@ suite_host_to_netns() {
     expect_failure "can't ping the netns iface from the host" \
         ping -c 1 -W 0.25 ${NS_IP_ADDR}
     expect_success "pings have been blocked on ingress" \
-        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/ip4\.proto eq 0x01/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
+        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/ip4\.proto eq icmp/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
     expect_success "flushing the ruleset" \
         ${FROM_NS} ${BFCLI} ruleset flush
 }
@@ -375,7 +375,7 @@ suite_icmp_TC() {
     expect_failure "can't ping ns iface from host" \
         ping -c 1 -W 0.25 ${NS_IP_ADDR}
     expect_success "pings have been blocked by TC chain" \
-        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/icmp\.code eq 0x00/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
+        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/icmp\.code eq 0/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
     expect_success "flushing the ruleset" \
         ${FROM_NS} ${BFCLI} ruleset flush
 }
@@ -390,7 +390,7 @@ suite_icmp_XDP() {
     expect_failure "can't ping the netns iface from the host" \
         ping -c 1 -W 0.25 ${NS_IP_ADDR}
     expect_success "pings have been blocked by XDP chain" \
-        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/icmp\.code eq 0x00/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
+        ${FROM_NS} ${BFCLI} chain get --name xdp \| awk \'/icmp\.code eq 0/{getline\; print \$2}\' \| grep -q \"^1$\" \&\& exit 0 \|\| exit 1
     expect_success "flushing the ruleset" \
         ${FROM_NS} ${BFCLI} ruleset flush
 }
