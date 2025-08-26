@@ -68,6 +68,18 @@ target_link_options(bf_global_flags
         $<$<CONFIG:debug>:-fsanitize=address -fsanitize=undefined>
 )
 
+add_library(bf_global_flags_cxx INTERFACE)
+target_compile_options(bf_global_flags_cxx
+    INTERFACE
+        -std=c++20 -Wall -Wextra -fPIC
+        $<$<CONFIG:debug>:-O0 -g3 -ggdb -fno-omit-frame-pointer -fsanitize=address -fsanitize=undefined>
+        $<$<CONFIG:release>:-O2>
+)
+target_link_options(bf_global_flags_cxx
+    INTERFACE
+        $<$<CONFIG:debug>:-fsanitize=address -fsanitize=undefined>
+)
+
 configure_file(
     ${CMAKE_SOURCE_DIR}/src/version.h.in
     ${CMAKE_BINARY_DIR}/include/version.h
