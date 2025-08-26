@@ -24,6 +24,7 @@ int bf_btf_setup(void)
     if (!_bf_btf)
         return bf_err_r(errno, "failed to load vmlinux BTF");
 
+
     return 0;
 }
 
