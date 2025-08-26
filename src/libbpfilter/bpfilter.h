@@ -128,6 +128,18 @@ int bf_chain_get(const char *name, struct bf_chain **chain,
 int bf_chain_logs_fd(const char *name);
 
 /**
+ * @brief Get the file descriptor of a chain's program.
+ *
+ * @pre
+ * - `name` is a non-NULL pointer to a C-string.
+ *
+ * @param name Name of the chain to get the program's file descriptor from.
+ * @return File descriptor of the chain's program, or a negative error value
+ *         on failure. The caller owns the file descriptor.
+ */
+int bf_chain_prog_fd(const char *name);
+
+/**
  * Load a chain.
  *
  * If a chain with the same name already exist, `-EEXIST` is returned.
