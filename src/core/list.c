@@ -26,6 +26,7 @@ static int bf_list_node_new(bf_list_node **node, void *data)
     bf_assert(node);
 
     _node = calloc(1, sizeof(*_node));
+
     if (!_node)
         return -ENOMEM;
 
