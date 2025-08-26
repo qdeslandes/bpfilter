@@ -46,3 +46,26 @@ target_link_libraries(core
         bf_global_flags
         PkgConfig::bpf
 )
+
+set(core++_srcs
+    ${CMAKE_CURRENT_SOURCE_DIR}/Matcher.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Rule.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Set.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Chain.hpp
+)
+
+add_library(core++
+    INTERFACE
+        ${core++_srcs}
+)
+
+target_include_directories(core++
+    INTERFACE
+        ${CMAKE_SOURCE_DIR}/src
+)
+
+target_link_libraries(core++
+    INTERFACE
+        bf_global_flags_cxx
+        core
+)
