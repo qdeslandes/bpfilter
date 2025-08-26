@@ -27,6 +27,7 @@ const char *bf_logger_get_color(enum bf_color color, enum bf_style style)
         return "";
     }
 
+
     switch (color) {
     case BF_COLOR_DEFAULT:
         return (style == BF_STYLE_BOLD) ? "\033[1;39m" : "\033[0;39m";
