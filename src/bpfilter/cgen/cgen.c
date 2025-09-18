@@ -5,6 +5,9 @@
 
 #include "cgen/cgen.h"
 
+#include <linux/bpf.h>
+
+#include <bpf/bpf.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -12,6 +15,7 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include <bpfilter/bpf.h>
 #include <bpfilter/chain.h>
 #include <bpfilter/counter.h>
 #include <bpfilter/dump.h>
@@ -30,24 +34,6 @@
 #include "ctx.h"
 #include "opts.h"
 
-static int _bf_cgen_get_chain_pindir_fd(const char *name)
-{
-    _cleanup_close_ int bf_fd = -1;
-    _cleanup_close_ int chain_fd = -1;
-
-    bf_assert(name);
-
-    bf_fd = bf_ctx_get_pindir_fd();
-    if (bf_fd < 0)
-        return bf_fd;
-
-    chain_fd = bf_opendir_at(bf_fd, name, true);
-    if (chain_fd < 0)
-        return chain_fd;
-
-    return TAKE_FD(chain_fd);
-}
-
 int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
                 struct bf_chain **chain)
 {
@@ -58,8 +44,9 @@ int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
         return -ENOMEM;
 
     (*cgen)->front = front;
-    (*cgen)->program = NULL;
     (*cgen)->chain = TAKE_PTR(*chain);
+    (*cgen)->fd = -1;
+    (*cgen)->link = NULL;
 
     return 0;
 }
@@ -67,6 +54,8 @@ int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
 int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
 {
     _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
+    _cleanup_close_ int fd = -1;
+    _cleanup_close_ int dir_fd = -1;
     bf_rpack_node_t child;
     int r;
 
@@ -89,22 +78,33 @@ int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
     if (r)
         return bf_rpack_key_err(r, "bf_cgen.chain");
 
-    r = bf_rpack_kv_node(node, "program", &child);
+    if ((dir_fd = bf_ctx_get_pindir_fd()) < 0) {
+        return bf_err_r(dir_fd,
+                        "failed to open chain pin directory for '%s'",
+                        _cgen->chain->name);
+    }
+
+    r = bf_bpf_obj_get(_cgen->chain->name, dir_fd, &fd);
+    if (r) {
+        return bf_err_r(r, "failed to open program for chain %s",
+                        _cgen->chain->name);
+    }
+
+    uint32_t id;
+    r = bf_bpf_obj_get_id(fd, &id);
     if (r)
-        return bf_rpack_key_err(r, "bf_cgen.program");
-    if (!bf_rpack_is_nil(child)) {
-        _cleanup_close_ int dir_fd = -1;
+        bf_err_r(r, "failed to get ID for chain %s", _cgen->chain->name);
+    bf_info("object ID is %u", id);
 
-        if ((dir_fd = _bf_cgen_get_chain_pindir_fd(_cgen->chain->name)) < 0) {
-            return bf_err_r(dir_fd,
-                            "failed to open chain pin directory for '%s'",
-                            _cgen->chain->name);
-        }
-
-        r = bf_program_new_from_pack(&_cgen->program, _cgen->chain, dir_fd,
-                                     child);
+    _cleanup_close_ int _fd = -1;
+    if ((r = bf_bpf_prog_get_fd_by_id(id)) > 0) {
+        _cgen->fd = TAKE_FD(fd);
+        bf_info("restored porgram");
+    } else if ((r = bf_bpf_link_get_fd_by_id(id)) > 0) {
+        r = bf_link_new_from_obj(&_cgen->link, &fd);
         if (r)
-            return r;
+            return bf_err_r(r, "failed to restore link");
+        bf_info("restored link");
     }
 
     *cgen = TAKE_PTR(_cgen);
@@ -121,18 +121,11 @@ void bf_cgen_free(struct bf_cgen **cgen)
     if (!*cgen)
         return;
 
-    /* Perform a non-recursive removal of the chain's pin directory: if
-     * the chain hasn't been pinned (e.g. due to a failure), the pin directory
-     * will be empty and will be removed. If the chain is valid and pinned, then
-     * the removal of the pin directory will fail, but that's alright. */
-    if (bf_opts_persist() && (pin_fd = bf_ctx_get_pindir_fd()) >= 0)
-        bf_rmdir_at(pin_fd, (*cgen)->chain->name, false);
-
-    bf_program_free(&(*cgen)->program);
+    closep(&(*cgen)->fd);
+    bf_link_free(&(*cgen)->link);
     bf_chain_free(&(*cgen)->chain);
 
-    free(*cgen);
-    *cgen = NULL;
+    freep((void *)cgen);
 }
 
 int bf_cgen_pack(const struct bf_cgen *cgen, bf_wpack_t *pack)
@@ -145,14 +138,6 @@ int bf_cgen_pack(const struct bf_cgen *cgen, bf_wpack_t *pack)
     bf_wpack_open_object(pack, "chain");
     bf_chain_pack(cgen->chain, pack);
     bf_wpack_close_object(pack);
-
-    if (cgen->program) {
-        bf_wpack_open_object(pack, "program");
-        bf_program_pack(cgen->program, pack);
-        bf_wpack_close_object(pack);
-    } else {
-        bf_wpack_kv_nil(pack, "program");
-    }
 
     return bf_wpack_is_valid(pack) ? 0 : -EINVAL;
 }
@@ -172,16 +157,6 @@ void bf_cgen_dump(const struct bf_cgen *cgen, prefix_t *prefix)
     bf_dump_prefix_push(prefix);
     bf_chain_dump(cgen->chain, bf_dump_prefix_last(prefix));
     bf_dump_prefix_pop(prefix);
-
-    // Programs
-    if (cgen->program) {
-        DUMP(bf_dump_prefix_last(prefix), "program: struct bf_program *");
-        bf_dump_prefix_push(prefix);
-        bf_program_dump(cgen->program, bf_dump_prefix_last(prefix));
-        bf_dump_prefix_pop(prefix);
-    } else {
-        DUMP(bf_dump_prefix_last(prefix), "program: (struct bf_program *)NULL");
-    }
 
     bf_dump_prefix_pop(prefix);
 }
@@ -216,7 +191,7 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
     bf_assert(cgen);
 
     if (bf_opts_persist()) {
-        pindir_fd = _bf_cgen_get_chain_pindir_fd(cgen->chain->name);
+        pindir_fd = bf_ctx_get_pindir_fd();
         if (pindir_fd < 0)
             return pindir_fd;
     }
@@ -233,21 +208,31 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
     if (r < 0)
         return bf_err_r(r, "failed to load the chain");
 
+    cgen->fd = TAKE_FD(prog->runtime.prog_fd);
+
     if (hookopts) {
         r = bf_ns_set(ns, bf_ctx_get_ns());
         if (r)
             return bf_err_r(r, "failed to switch to the client's namespaces");
 
-        r = bf_program_attach(prog, hookopts);
-        if (r < 0)
-            return bf_err_r(r, "failed to load and attach the chain");
+        r = bf_link_new(&cgen->link, "bf_link");
+        if (r)
+            return r;
+
+        r = bf_link_attach(cgen->link, cgen->chain->hook, hookopts, cgen->fd);
+        if (r) {
+            return bf_err_r(r, "failed to attach bf_link for %s program",
+                            bf_flavor_to_str(prog->flavor));
+        }
+
+        cgen->fd = -1;
 
         if (bf_ns_set(bf_ctx_get_ns(), ns))
             bf_abort("failed to restore previous namespaces, aborting");
     }
 
     if (bf_opts_persist()) {
-        r = bf_program_pin(prog, pindir_fd);
+        r = bf_link_pin_name(cgen->link, pindir_fd, cgen->chain->name);
         if (r)
             return r;
     }
@@ -401,7 +386,10 @@ void bf_cgen_detach(struct bf_cgen *cgen)
 {
     bf_assert(cgen);
 
-    bf_program_detach(cgen->program);
+    if (cgen->link) {
+        bf_link_detach(cgen->link);
+        bf_link_free(&cgen->link);
+    }
 }
 
 void bf_cgen_unload(struct bf_cgen *cgen)
@@ -410,16 +398,8 @@ void bf_cgen_unload(struct bf_cgen *cgen)
 
     bf_assert(cgen);
 
-    chain_fd = _bf_cgen_get_chain_pindir_fd(cgen->chain->name);
-    if (chain_fd < 0) {
-        bf_err_r(chain_fd, "failed to open pin directory for '%s'",
-                 cgen->chain->name);
-        return;
-    }
-
-    // The chain's pin directory will be removed in bf_cgen_free()
-    bf_program_unpin(cgen->program, chain_fd);
-    bf_program_unload(cgen->program);
+    bf_cgen_detach(cgen);
+    closep(&cgen->fd);
 }
 
 int bf_cgen_get_counters(const struct bf_cgen *cgen, bf_list *counters)

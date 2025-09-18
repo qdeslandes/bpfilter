@@ -58,6 +58,8 @@ int bf_link_new(struct bf_link **link, const char *name);
 int bf_link_new_from_pack(struct bf_link **link, int dir_fd,
                           bf_rpack_node_t node);
 
+int bf_link_new_from_obj(struct bf_link **link, int *fd);
+
 /**
  * Deallocate a `bf_link` object.
  *
@@ -142,3 +144,5 @@ int bf_link_pin(struct bf_link *link, int dir_fd);
  *        be a valid file descriptor.
  */
 void bf_link_unpin(struct bf_link *link, int dir_fd);
+
+int bf_link_pin_name(struct bf_link *link, int dir_fd, const char *name);

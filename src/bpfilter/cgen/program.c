@@ -112,17 +112,17 @@ int bf_program_new(struct bf_program **program, const struct bf_chain *chain)
 
     (void)snprintf(_program->prog_name, BPF_OBJ_NAME_LEN, "%s", "bf_prog");
 
-    r = bf_map_new(&_program->cmap, "counters_map", BF_MAP_TYPE_COUNTERS,
+    r = bf_map_new(&_program->cmap, "bf_cmap", BF_MAP_TYPE_COUNTERS,
                    sizeof(uint32_t), sizeof(struct bf_counter), 1);
     if (r < 0)
         return bf_err_r(r, "failed to create the counters bf_map object");
 
-    r = bf_map_new(&_program->pmap, "printer_map", BF_MAP_TYPE_PRINTER,
+    r = bf_map_new(&_program->pmap, "bf_pmap", BF_MAP_TYPE_PRINTER,
                    sizeof(uint32_t), BF_MAP_VALUE_SIZE_UNKNOWN, 1);
     if (r < 0)
         return bf_err_r(r, "failed to create the printer bf_map object");
 
-    r = bf_map_new(&_program->lmap, "log_map", BF_MAP_TYPE_LOG, 0, 0,
+    r = bf_map_new(&_program->lmap, "bf_lmap", BF_MAP_TYPE_LOG, 0, 0,
                    _BF_LOG_MAP_SIZE);
     if (r < 0)
         return bf_err_r(r, "failed to create the log bf_map object");
@@ -132,7 +132,7 @@ int bf_program_new(struct bf_program **program, const struct bf_chain *chain)
         struct bf_set *set = bf_list_node_get_data(set_node);
         _free_bf_map_ struct bf_map *map = NULL;
 
-        (void)snprintf(name, BPF_OBJ_NAME_LEN, "set_%04x", (uint8_t)set_idx++);
+        (void)snprintf(name, BPF_OBJ_NAME_LEN, "bf_smap_%04x", (uint8_t)set_idx++);
         r = bf_map_new_from_set(&map, name, set);
         if (r < 0)
             return r;

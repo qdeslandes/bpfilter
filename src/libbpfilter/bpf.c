@@ -310,3 +310,53 @@ int bf_bpf_link_detach(int link_fd)
 
     return bf_bpf(BF_BPF_LINK_DETACH, &attr);
 }
+
+int bf_bpf_obj_get_info_by_fd(int fd, void *info, size_t info_len)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.info.bpf_fd = fd;
+    attr.info.info_len = info_len;
+    attr.info.info = bf_ptr_to_u64(info);
+
+    return bf_bpf(BF_BPF_OBJ_GET_INFO_BY_FD, &attr);
+}
+
+int bf_bpf_obj_get_id(int fd, uint32_t *id)
+{
+    union info {
+        struct bpf_link_info link;
+        struct bpf_prog_info prog;
+        struct bpf_map_info map;
+    } info;
+    int r;
+
+    r = bf_bpf_obj_get_info_by_fd(fd, &info, sizeof(info));
+    if (r)
+        return r;
+
+    *id = info.link.id;
+
+    return 0;
+}
+
+int bf_bpf_prog_get_fd_by_id(uint32_t id)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.prog_id = id;
+
+    return bf_bpf(BF_BPF_PROG_GET_FD_BY_ID, &attr);
+}
+
+int bf_bpf_link_get_fd_by_id(uint32_t id)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.link_id = id;
+
+    return bf_bpf(BF_BPF_LINK_GET_FD_BY_ID, &attr);
+}

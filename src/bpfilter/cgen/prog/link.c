@@ -84,6 +84,25 @@ int bf_link_new_from_pack(struct bf_link **link, int dir_fd,
     return 0;
 }
 
+int bf_link_new_from_obj(struct bf_link **link, int *fd)
+{
+    _free_bf_link_ struct bf_link *_link = NULL;
+
+    bf_assert(link);
+
+    _link = malloc(sizeof(*_link));
+    if (!_link)
+        return -ENOMEM;
+
+    _link->hookopts = NULL;
+    _link->fd = *fd;
+    *fd = -1;
+
+    *link = TAKE_PTR(_link);
+
+    return 0;
+}
+
 void bf_link_free(struct bf_link **link)
 {
     bf_assert(link);
@@ -173,6 +192,7 @@ int bf_link_attach(struct bf_link *link, enum bf_hook hook,
         return r;
 
     link->fd = r;
+    bf_info("taking ptr %p", hookopts);
     link->hookopts = TAKE_PTR(*hookopts);
 
     return 0;
@@ -252,6 +272,20 @@ int bf_link_pin(struct bf_link *link, int dir_fd)
     r = bf_bpf_obj_pin(link->name, link->fd, dir_fd);
     if (r)
         return bf_err_r(r, "failed to pin BPF link '%s'", link->name);
+
+    return 0;
+}
+
+int bf_link_pin_name(struct bf_link *link, int dir_fd, const char *name)
+{
+    int r;
+
+    bf_assert(link);
+    bf_assert(dir_fd > 0);
+
+    r = bf_bpf_obj_pin(name, link->fd, dir_fd);
+    if (r)
+        return bf_err_r(r, "failed to pin BPF link '%s'", name);
 
     return 0;
 }

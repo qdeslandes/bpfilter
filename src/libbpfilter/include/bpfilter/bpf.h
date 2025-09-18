@@ -187,3 +187,8 @@ int bf_bpf_link_update(int link_fd, int new_prog_fd);
  * @return 0 on success, or a negative error value on failure.
  */
 int bf_bpf_link_detach(int link_fd);
+
+int bf_bpf_obj_get_info_by_fd(int fd, void *info, size_t info_len);
+int bf_bpf_obj_get_id(int fd, uint32_t *id);
+int bf_bpf_prog_get_fd_by_id(uint32_t id);
+int bf_bpf_link_get_fd_by_id(uint32_t id);
