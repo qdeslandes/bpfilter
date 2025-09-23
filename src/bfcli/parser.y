@@ -374,9 +374,9 @@ matcher         : matcher_type matcher_op RAW_PAYLOAD
                 {
                      _free_bf_matcher_ struct bf_matcher *matcher = NULL;
                      _free_bf_set_ struct bf_set *set = NULL;
-                    _cleanup_free_ const char *raw_key = $1;
-                    _cleanup_free_ const char *payload = $3;
-                    enum bf_matcher_op op = $2;
+                     _cleanup_free_ const char *raw_key = $1;
+                     _cleanup_free_ const char *payload = $3;
+                     enum bf_matcher_op op = $2;
                      uint32_t set_id = bf_list_size(&ruleset->sets);
                      int r;
 
