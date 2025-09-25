@@ -93,6 +93,8 @@
 #define BF_IPT_PRIO_0 1000
 #define BF_IPT_PRIO_1 1001
 
+#define BF_IPT_MASK_32 0xffffffff
+
 /**
  * Get size of an ipt_replace structure.
  *
@@ -203,32 +205,54 @@ static int _bf_ipt_entry_to_rule(const struct ipt_entry *entry,
 
     // Match on source IPv4 address
     if (entry->ip.src.s_addr || entry->ip.smsk.s_addr) {
-        struct bf_matcher_ip4_addr addr = {
-            .addr = entry->ip.src.s_addr,
-            .mask = entry->ip.smsk.s_addr,
-        };
+        if (entry->ip.smsk.s_addr == BF_IPT_MASK_32) {
+            r = bf_rule_add_matcher(
+                _rule, BF_MATCHER_IP4_SADDR,
+                entry->ip.invflags & IPT_INV_SRCIP ? BF_MATCHER_NE :
+                                                     BF_MATCHER_EQ,
+                &entry->ip.src.s_addr, sizeof(entry->ip.smsk.s_addr));
+            if (r)
+                return r;
+        } else {
+            struct bf_ip4_lpm_key key = {
+                .data = entry->ip.src.s_addr,
+                .prefixlen = 32 - __builtin_clz(entry->ip.smsk.s_addr),
+            };
 
-        r = bf_rule_add_matcher(
-            _rule, BF_MATCHER_IP4_SADDR,
-            entry->ip.invflags & IPT_INV_SRCIP ? BF_MATCHER_NE : BF_MATCHER_EQ,
-            &addr, sizeof(addr));
-        if (r)
-            return r;
+            r = bf_rule_add_matcher(_rule, BF_MATCHER_IP4_SNET,
+                                    entry->ip.invflags & IPT_INV_SRCIP ?
+                                        BF_MATCHER_NE :
+                                        BF_MATCHER_EQ,
+                                    &key, sizeof(key));
+            if (r)
+                return r;
+        }
     }
 
     // Match on destination IPv4 address
     if (entry->ip.dst.s_addr || entry->ip.dmsk.s_addr) {
-        struct bf_matcher_ip4_addr addr = {
-            .addr = entry->ip.dst.s_addr,
-            .mask = entry->ip.dmsk.s_addr,
-        };
+        if (entry->ip.dmsk.s_addr == BF_IPT_MASK_32) {
+            r = bf_rule_add_matcher(
+                _rule, BF_MATCHER_IP4_DADDR,
+                entry->ip.invflags & IPT_INV_DSTIP ? BF_MATCHER_NE :
+                                                     BF_MATCHER_EQ,
+                &entry->ip.dst.s_addr, sizeof(entry->ip.dmsk.s_addr));
+            if (r)
+                return r;
+        } else {
+            struct bf_ip4_lpm_key key = {
+                .data = entry->ip.dst.s_addr,
+                .prefixlen = 32 - __builtin_clz(entry->ip.dmsk.s_addr),
+            };
 
-        r = bf_rule_add_matcher(
-            _rule, BF_MATCHER_IP4_DADDR,
-            entry->ip.invflags & IPT_INV_DSTIP ? BF_MATCHER_NE : BF_MATCHER_EQ,
-            &addr, sizeof(addr));
-        if (r)
-            return r;
+            r = bf_rule_add_matcher(_rule, BF_MATCHER_IP4_DNET,
+                                    entry->ip.invflags & IPT_INV_DSTIP ?
+                                        BF_MATCHER_NE :
+                                        BF_MATCHER_EQ,
+                                    &key, sizeof(key));
+            if (r)
+                return r;
+        }
     }
 
     /* Match on the protocol field of the IPv4 packet (and not the L4 protocol,
@@ -269,27 +293,41 @@ static int _bf_ipt_entry_to_rule(const struct ipt_entry *entry,
 static int _bf_rule_to_ipt_entry(const struct bf_rule *rule,
                                  struct ipt_entry *entry)
 {
-    const struct bf_matcher_ip4_addr *addr;
-
     bf_assert(entry && rule);
 
     bf_list_foreach (&rule->matchers, matcher_node) {
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
+        const uint32_t *addr = bf_matcher_payload(matcher);
+        const struct bf_ip4_lpm_key *net = bf_matcher_payload(matcher);
 
         switch (bf_matcher_get_type(matcher)) {
         case BF_MATCHER_IP4_SADDR:
             if (bf_matcher_get_op(matcher) == BF_MATCHER_NE)
                 entry->ip.invflags |= IPT_INV_SRCIP;
             addr = bf_matcher_payload(matcher);
-            entry->ip.src.s_addr = addr->addr;
-            entry->ip.smsk.s_addr = addr->mask;
+            entry->ip.src.s_addr = *addr;
+            entry->ip.smsk.s_addr = BF_IPT_MASK_32;
             break;
         case BF_MATCHER_IP4_DADDR:
             if (bf_matcher_get_op(matcher) == BF_MATCHER_NE)
                 entry->ip.invflags |= IPT_INV_DSTIP;
             addr = bf_matcher_payload(matcher);
-            entry->ip.dst.s_addr = addr->addr;
-            entry->ip.dmsk.s_addr = addr->mask;
+            entry->ip.dst.s_addr = net->data;
+            entry->ip.dmsk.s_addr = BF_IPT_MASK_32;
+            break;
+        case BF_MATCHER_IP4_SNET:
+            if (bf_matcher_get_op(matcher) == BF_MATCHER_NE)
+                entry->ip.invflags |= IPT_INV_SRCIP;
+            addr = bf_matcher_payload(matcher);
+            entry->ip.src.s_addr = net->data;
+            entry->ip.smsk.s_addr = (1 << net->prefixlen) - 1;
+            break;
+        case BF_MATCHER_IP4_DNET:
+            if (bf_matcher_get_op(matcher) == BF_MATCHER_NE)
+                entry->ip.invflags |= IPT_INV_DSTIP;
+            addr = bf_matcher_payload(matcher);
+            entry->ip.dst.s_addr = *addr;
+            entry->ip.dmsk.s_addr = (1 << net->prefixlen) - 1;
             break;
         case BF_MATCHER_IP4_PROTO:
             entry->ip.proto = *(uint8_t *)bf_matcher_payload(matcher);
