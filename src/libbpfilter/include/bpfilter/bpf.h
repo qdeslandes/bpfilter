@@ -84,6 +84,45 @@ int bf_bpf_obj_pin(const char *path, int fd, int dir_fd);
 int bf_bpf_obj_get(const char *path, int dir_fd, int *fd);
 
 /**
+ * @brief Get a BPF object info from its file descriptor.
+ *
+ * @param fd File descriptor to get info of.
+ * @param buffer Buffer to store the information about `fd`. Depending on the
+ *        object pointer by `fd`, `buffer` should be as big as `bpf_prog_info`,
+ *        `bpf_link_info`, or `bpf_map_info` structures.
+ * @param buffer_len Size of `buffer`.
+ * @return 0 on success, or a negative error value on failure.
+ */
+int bf_bpf_obj_get_info_by_fd(int fd, void *buffer, size_t buffer_len);
+
+/**
+ * @brief Get a BPF program file descriptor based on its ID.
+ *
+ * @param id BPF program ID.
+ * @return File descriptor of `id` on success, or a negative error value on
+ *         failure.
+ */
+int bf_bpf_prog_get_fd_by_id(uint32_t id);
+
+/**
+ * @brief Get a BPF link file descriptor based on its ID.
+ *
+ * @param id BPF program ID.
+ * @return File descriptor of `id` on success, or a negative error value on
+ *         failure.
+ */
+int bf_bpf_link_get_fd_by_id(uint32_t id);
+
+/**
+ * @brief Get a BPF map file descriptor based on its ID.
+ *
+ * @param id BPF program ID.
+ * @return File descriptor of `id` on success, or a negative error value on
+ *         failure.
+ */
+int bf_bpf_map_get_fd_by_id(uint32_t id);
+
+/**
  * Call `BPF_PROG_TEST_RUN` on @p prog_fd .
  *
  * @param prog_fd File descriptor of the program to test. Must be valid.

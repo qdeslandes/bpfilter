@@ -133,6 +133,51 @@ int bf_bpf_obj_get(const char *path, int dir_fd, int *fd)
     return 0;
 }
 
+int bf_bpf_obj_get_info_by_fd(int fd, void *buffer, size_t buffer_len)
+{
+    union bpf_attr attr;
+
+    bf_assert(buffer);
+
+    memset(&attr, 0, sizeof(attr));
+
+    attr.info.bpf_fd = fd;
+    attr.info.info_len = buffer_len;
+    attr.info.info = bf_ptr_to_u64(buffer);
+
+    return bf_bpf(BF_BPF_OBJ_GET_INFO_BY_FD, &attr);
+}
+
+int bf_bpf_prog_get_fd_by_id(uint32_t id)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.prog_id = id;
+
+    return bf_bpf(BF_BPF_PROG_GET_FD_BY_ID, &attr);
+}
+
+int bf_bpf_link_get_fd_by_id(uint32_t id)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.link_id = id;
+
+    return bf_bpf(BF_BPF_LINK_GET_FD_BY_ID, &attr);
+}
+
+int bf_bpf_map_get_fd_by_id(uint32_t id)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.map_id = id;
+
+    return bf_bpf(BF_BPF_MAP_GET_FD_BY_ID, &attr);
+}
+
 int bf_bpf_prog_run(int prog_fd, const void *pkt, size_t pkt_len,
                     const void *ctx, size_t ctx_len)
 {
