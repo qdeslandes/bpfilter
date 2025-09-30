@@ -84,6 +84,78 @@ int bf_link_new_from_pack(struct bf_link **link, int dir_fd,
     return 0;
 }
 
+int bf_link_new_from_id(struct bf_link **link, uint32_t id,
+                        struct bf_hookopts **hookopts)
+{
+    _free_bf_link_ struct bf_link *_link = NULL;
+    _cleanup_close_ int fd = -1;
+    struct bpf_link_info info;
+    int r;
+
+    bf_assert(link);
+
+    fd = bf_bpf_link_get_fd_by_id(id);
+    if (fd < 0)
+        return bf_err_r(fd, "failed to open BPF link (id=%u)", id);
+
+    r = bf_bpf_obj_get_info_by_fd(fd, &info, sizeof(info));
+    if (r)
+        return bf_err_r(r, "failed to get BPF link info (id=%u)", id);
+
+    switch (info.type) {
+    case BPF_LINK_TYPE_CGROUP:
+        if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_CGPATH)))
+            return bf_err_r(-EINVAL, "missing bf_hookopts.cgpath option");
+        break;
+    case BPF_LINK_TYPE_XDP:
+        if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_IFINDEX)))
+            return bf_err_r(-EINVAL, "missing bf_hookopts.ifindex option");
+        if ((*hookopts)->ifindex != (int)info.xdp.ifindex) {
+            return bf_err_r(-EINVAL, "expecting XDP ifindex %d, got %d",
+                            (*hookopts)->ifindex, (int)info.xdp.ifindex);
+        }
+        break;
+    case BPF_LINK_TYPE_NETFILTER:
+        if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_FAMILY)))
+            return bf_err_r(-EINVAL, "missing bf_hookopts.family option");
+        if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_PRIORITIES)))
+            return bf_err_r(-EINVAL, "missing bf_hookopts.priotities option");
+        if ((*hookopts)->family != info.netfilter.pf) {
+            return bf_err_r(-EINVAL, "expecting Netfilter family %d, got %d",
+                            (*hookopts)->family, info.netfilter.pf);
+        }
+        if ((*hookopts)->priorities[0] != info.netfilter.priority &&
+            (*hookopts)->priorities[1] != info.netfilter.priority) {
+            return bf_err_r(
+                -EINVAL, "expecting Netfilter priority %d or %d, got %d",
+                (*hookopts)->priorities[0], (*hookopts)->priorities[1],
+                info.netfilter.priority);
+        }
+        break;
+    case BPF_LINK_TYPE_TCX:
+        if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_IFINDEX)))
+            return bf_err_r(-EINVAL, "missing bf_hookopts.ifindex option");
+        if ((*hookopts)->ifindex != (int)info.tcx.ifindex) {
+            return bf_err_r(-EINVAL, "expecting TC ifindex %d, got %d",
+                            (*hookopts)->ifindex, (int)info.tcx.ifindex);
+        }
+        break;
+    default:
+        return bf_err_r(-ENOTSUP, "unsupported link type %d", info.type);
+    }
+
+    r = bf_link_new(&_link, "bf_link");
+    if (r)
+        return -ENOMEM;
+
+    _link->fd = TAKE_FD(fd);
+    _link->hookopts = TAKE_PTR(*hookopts);
+
+    *link = TAKE_PTR(_link);
+
+    return 0;
+}
+
 void bf_link_free(struct bf_link **link)
 {
     bf_assert(link);

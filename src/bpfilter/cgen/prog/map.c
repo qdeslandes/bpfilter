@@ -140,6 +140,67 @@ int bf_map_new_from_pack(struct bf_map **map, int dir_fd, bf_rpack_node_t node)
     return 0;
 }
 
+static int _bf_map_name_to_type(const char *name, enum bf_map_type *type)
+{
+    bf_assert(name);
+    bf_assert(type);
+
+    if (bf_streq(name, "bf_counters")) {
+        *type = BF_MAP_TYPE_COUNTERS;
+        return 0;
+    }
+
+    if (bf_streq(name, "bf_msgs")) {
+        *type = BF_MAP_TYPE_PRINTER;
+        return 0;
+    }
+
+    if (bf_streq(name, "bf_logs")) {
+        *type = BF_MAP_TYPE_LOG;
+        return 0;
+    }
+
+    if (bf_strneq(name, "bf_set_", strlen("bf_set_"))) {
+        *type = BF_MAP_TYPE_SET;
+        return 0;
+    }
+
+    return -EINVAL;
+}
+
+int bf_map_new_from_id(struct bf_map **map, uint32_t id)
+{
+    _free_bf_map_ struct bf_map *_map = NULL;
+    _cleanup_close_ int fd = -1;
+    struct bpf_map_info info;
+    enum bf_map_type type;
+    int r;
+
+    bf_assert(map);
+
+    fd = bf_bpf_map_get_fd_by_id(id);
+    if (fd < 0)
+        return bf_err_r(fd, "failed to open BPF map (id=%u)", id);
+
+    r = bf_bpf_obj_get_info_by_fd(fd, &info, sizeof(info));
+    if (r)
+        return bf_err_r(r, "failed to get BPF map info (id=%u)", id);
+
+    r = _bf_map_name_to_type(info.name, &type);
+    if (r)
+        return bf_err_r(r, "unknown BPF map type %d (id=%u)", info.type, id);
+
+    r = _bf_map_new(&_map, info.name, type, info.type, info.key_size,
+                    info.value_size, info.max_entries);
+    if (r)
+        return bf_err_r(r, "failed to create bf_map from ID (id=%u)", id);
+
+    _map->fd = TAKE_FD(fd);
+    *map = TAKE_PTR(_map);
+
+    return 0;
+}
+
 void bf_map_free(struct bf_map **map)
 {
     bf_assert(map);

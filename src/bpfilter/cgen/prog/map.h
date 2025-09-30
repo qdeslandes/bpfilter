@@ -99,6 +99,20 @@ int bf_map_new_from_set(struct bf_map **map, const char *name,
 int bf_map_new_from_pack(struct bf_map **map, int dir_fd, bf_rpack_node_t node);
 
 /**
+ * @brief Allocate and initialize a new map from its BPF ID.
+ *
+ * @note The new bf_map object will represent a BPF map from bpfilter's point
+ * of view, but it's not a BPF map.
+ *
+ * @param map Map object to allocate and initialize from the BPF info. The
+ *        caller will own the object. On failure, `*map` is unchanged.
+ *        Can't be NULL.
+ * @param id BPF ID of the map to create.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+int bf_map_new_from_id(struct bf_map **map, uint32_t id);
+
+/**
  * Free a BPF map object.
  *
  * The BPF map's file descriptor contained in @c map is closed and set to

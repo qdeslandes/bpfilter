@@ -59,6 +59,20 @@ int bf_link_new_from_pack(struct bf_link **link, int dir_fd,
                           bf_rpack_node_t node);
 
 /**
+ * @brief Allocate and initialize a new link from its BPF ID.
+ *
+ * @param link `bf_link` object to allocate and initialize from BPF info. On
+ *        failure, `*link` is unchanged. Can't be NULL.
+ * @param id BPF ID of the link to create.
+ * @param hookopts Hook options initially used to create the link. It will be
+ *        checked against the actual link options (collected from the BPF
+ *        subsystem), to ensure there is no divergence. Can't be NULL.
+ * @return 0 on success, or a negative errno value on error.
+ */
+int bf_link_new_from_id(struct bf_link **link, uint32_t id,
+                        struct bf_hookopts **hookopts);
+
+/**
  * Deallocate a `bf_link` object.
  *
  * The BPF link's file descriptor contained in `link` is closed and set to
