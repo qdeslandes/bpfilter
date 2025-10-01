@@ -18,6 +18,7 @@
 #include <bpfilter/response.h>
 
 #include "cgen/cgen.h"
+#include "cgen/handle.h"
 #include "cgen/prog/link.h"
 #include "cgen/prog/map.h"
 #include "cgen/program.h"
@@ -89,7 +90,7 @@ static int _bf_cli_ruleset_get(const struct bf_request *request,
         if (r)
             return bf_err_r(r, "failed to add chain to list");
 
-        r = bf_list_add_tail(&hookopts, cgen->program->link->hookopts);
+        r = bf_list_add_tail(&hookopts, cgen->program->handle->link->hookopts);
         if (r)
             return bf_err_r(r, "failed to add hookopts to list");
 
@@ -296,9 +297,9 @@ static int _bf_cli_chain_get(const struct bf_request *request,
         return r;
     bf_wpack_close_object(wpack);
 
-    if (cgen->program->link->hookopts) {
+    if (cgen->program->handle->link->hookopts) {
         bf_wpack_open_object(wpack, "hookopts");
-        r = bf_hookopts_pack(cgen->program->link->hookopts, wpack);
+        r = bf_hookopts_pack(cgen->program->handle->link->hookopts, wpack);
         if (r)
             return r;
         bf_wpack_close_object(wpack);
@@ -367,10 +368,10 @@ int _bf_cli_chain_logs_fd(const struct bf_request *request,
     if (!cgen)
         return bf_err_r(-ENOENT, "failed to find chain '%s'", name);
 
-    if (!cgen->program || !cgen->program->lmap->fd)
+    if (!cgen->program || !cgen->program->handle->logger->fd)
         return bf_err_r(-ENOENT, "chain '%s' has no logs buffer", name);
 
-    r = bf_send_fd(bf_request_fd(request), cgen->program->lmap->fd);
+    r = bf_send_fd(bf_request_fd(request), cgen->program->handle->logger->fd);
     if (r < 0)
         return bf_err_r(errno, "failed to send logs FD for '%s'", name);
 
@@ -462,7 +463,7 @@ int _bf_cli_chain_attach(const struct bf_request *request,
     cgen = bf_ctx_get_cgen(name);
     if (!cgen)
         return bf_err_r(-ENOENT, "chain '%s' does not exist", name);
-    if (cgen->program->link->hookopts)
+    if (cgen->program->handle->link->hookopts)
         return bf_err_r(-EBUSY, "chain '%s' is already linked to a hook", name);
 
     r = bf_hookopts_validate(hookopts, cgen->chain->hook);
@@ -505,7 +506,7 @@ int _bf_cli_chain_update(const struct bf_request *request,
     if (!cgen)
         return -ENOENT;
 
-    if (!cgen->program->link->hookopts) {
+    if (!cgen->program->handle->link->hookopts) {
         return bf_err_r(-EINVAL, "chain '%s' is not attached", chain->name);
     }
 

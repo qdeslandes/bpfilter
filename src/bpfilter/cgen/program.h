@@ -185,6 +185,7 @@
     })
 
 struct bf_chain;
+struct bf_handle;
 struct bf_map;
 struct bf_counter;
 struct bf_link;
@@ -197,20 +198,6 @@ struct bf_program
 
     /// Log messages printer
     struct bf_printer *printer;
-
-    /// Counters map
-    struct bf_map *cmap;
-    /// Printer map
-    struct bf_map *pmap;
-    /// Log map
-    struct bf_map *lmap;
-    /// List of set maps
-    bf_list sets;
-
-    /** Link objects attaching the program to a hook.
-     * @todo A ``bf_program`` should not have any link until the program is
-     * attached. */
-    struct bf_link *link;
 
     /* Bytecode */
     uint32_t elfstubs_location[_BF_ELFSTUB_MAX];
@@ -237,6 +224,8 @@ struct bf_program
          * the @ref bf_program doesn't have to manage its lifetime. */
         const struct bf_chain *chain;
     } runtime;
+
+    struct bf_handle *handle;
 };
 
 #define _free_bf_program_ __attribute__((__cleanup__(bf_program_free)))

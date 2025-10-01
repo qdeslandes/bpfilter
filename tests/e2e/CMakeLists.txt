@@ -51,10 +51,6 @@ target_link_libraries(setuserns_bin
 add_custom_target(e2e
     COMMAND
         ${CMAKE_SOURCE_DIR}/tools/asroot
-            $<TARGET_FILE:e2e_bin>
-                --bpfilter $<TARGET_FILE:bpfilter>
-    COMMAND
-        ${CMAKE_SOURCE_DIR}/tools/asroot
             ${CMAKE_CURRENT_SOURCE_DIR}/cli.sh
                 --bpfilter $<TARGET_FILE:bpfilter>
                 --bfcli $<TARGET_FILE:bfcli>

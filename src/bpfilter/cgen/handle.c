@@ -14,6 +14,7 @@
 #include "bpfilter/helper.h"
 #include "cgen/prog/link.h"
 #include "cgen/prog/map.h"
+#include "ctx.h"
 
 int bf_handle_new(struct bf_handle **handle)
 {
@@ -35,7 +36,7 @@ int bf_handle_new(struct bf_handle **handle)
 
 static int _bf_handle_id_is_link(uint32_t id)
 {
-    int r = bf_bpf_link_get_fd_by_id(id);
+    int r = bf_bpf_link_get_fd_by_id(id, bf_ctx_token());
     if (r == -ENOENT)
         return 0;
     if (r < 0)
@@ -47,7 +48,7 @@ static int _bf_handle_id_is_link(uint32_t id)
 
 static int _bf_handle_id_is_prog(uint32_t id)
 {
-    int r = bf_bpf_prog_get_fd_by_id(id);
+    int r = bf_bpf_prog_get_fd_by_id(id, bf_ctx_token());
     if (r == -ENOENT)
         return 0;
     if (r < 0)
@@ -89,7 +90,7 @@ int bf_handle_new_from_fd(struct bf_handle **handle, int fd,
             return bf_err_r(r, "failed to restore link");
 
         prog_id = fd_info.link_info.prog_id;
-        _handle->prog_fd = bf_bpf_prog_get_fd_by_id(prog_id);
+        _handle->prog_fd = bf_bpf_prog_get_fd_by_id(prog_id, bf_ctx_token());
         if (_handle->prog_fd < 0) {
             return bf_err_r(_handle->prog_fd,
                             "failed to open BPF program ID %u", prog_id);
@@ -190,6 +191,7 @@ void bf_handle_free(struct bf_handle **handle)
     bf_map_free(&_handle->printer);
     bf_map_free(&_handle->logger);
     bf_list_clean(&_handle->sets);
+    bf_link_free(&_handle->link);
     freep((void *)handle);
 }
 

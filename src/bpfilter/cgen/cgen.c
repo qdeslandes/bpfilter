@@ -25,6 +25,7 @@
 #include <bpfilter/pack.h>
 
 #include "cgen/dump.h"
+#include "cgen/handle.h"
 #include "cgen/prog/link.h"
 #include "cgen/program.h"
 #include "ctx.h"
@@ -334,7 +335,7 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
         bf_abort("failed to restore previous namespaces, aborting");
 
     if (bf_opts_persist()) {
-        r = bf_link_pin(cgen->program->link, pindir_fd);
+        r = bf_link_pin(cgen->program->handle->link, pindir_fd);
         if (r) {
             bf_program_detach(cgen->program);
             return r;
@@ -378,7 +379,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
     if (bf_opts_persist())
         bf_program_unpin(old_prog, pindir_fd);
 
-    r = bf_link_update(old_prog->link, cgen->chain->hook,
+    r = bf_link_update(old_prog->handle->link, cgen->chain->hook,
                        new_prog->runtime.prog_fd);
     if (r) {
         bf_err_r(r, "failed to update bf_link object with new program");
@@ -388,7 +389,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
     }
 
     // We updated the old link, we need to store it in the new program
-    bf_swap(new_prog->link, old_prog->link);
+    bf_swap(new_prog->handle->link, old_prog->handle->link);
 
     if (bf_opts_persist()) {
         r = bf_program_pin(new_prog, pindir_fd);

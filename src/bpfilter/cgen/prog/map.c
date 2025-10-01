@@ -178,7 +178,7 @@ int bf_map_new_from_id(struct bf_map **map, uint32_t id)
 
     bf_assert(map);
 
-    fd = bf_bpf_map_get_fd_by_id(id);
+    fd = bf_bpf_map_get_fd_by_id(id, bf_ctx_token());
     if (fd < 0)
         return bf_err_r(fd, "failed to open BPF map (id=%u)", id);
 

@@ -148,7 +148,7 @@ int bf_bpf_obj_get_info_by_fd(int fd, void *buffer, size_t buffer_len)
     return bf_bpf(BF_BPF_OBJ_GET_INFO_BY_FD, &attr);
 }
 
-int bf_bpf_prog_get_fd_by_id(uint32_t id)
+int bf_bpf_prog_get_fd_by_id(uint32_t id, int token_fd)
 {
     union bpf_attr attr;
 
@@ -158,7 +158,7 @@ int bf_bpf_prog_get_fd_by_id(uint32_t id)
     return bf_bpf(BF_BPF_PROG_GET_FD_BY_ID, &attr);
 }
 
-int bf_bpf_link_get_fd_by_id(uint32_t id)
+int bf_bpf_link_get_fd_by_id(uint32_t id, int token_fd)
 {
     union bpf_attr attr;
 
@@ -168,7 +168,7 @@ int bf_bpf_link_get_fd_by_id(uint32_t id)
     return bf_bpf(BF_BPF_LINK_GET_FD_BY_ID, &attr);
 }
 
-int bf_bpf_map_get_fd_by_id(uint32_t id)
+int bf_bpf_map_get_fd_by_id(uint32_t id, int token_fd)
 {
     union bpf_attr attr;
 

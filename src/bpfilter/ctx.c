@@ -459,6 +459,8 @@ struct bf_ns *bf_ctx_get_ns(void)
 
 int bf_ctx_token(void)
 {
+    if (!_bf_global_ctx)
+        return -1;
     return _bf_global_ctx->token_fd;
 }
 

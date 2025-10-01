@@ -23,6 +23,8 @@
 #include <bpfilter/logger.h>
 #include <bpfilter/pack.h>
 
+#include "ctx.h"
+
 int bf_link_new(struct bf_link **link, const char *name)
 {
     _free_bf_link_ struct bf_link *_link = NULL;
@@ -94,7 +96,7 @@ int bf_link_new_from_id(struct bf_link **link, uint32_t id,
 
     bf_assert(link);
 
-    fd = bf_bpf_link_get_fd_by_id(id);
+    fd = bf_bpf_link_get_fd_by_id(id, bf_ctx_token());
     if (fd < 0)
         return bf_err_r(fd, "failed to open BPF link (id=%u)", id);
 

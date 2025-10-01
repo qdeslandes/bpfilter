@@ -102,7 +102,7 @@ int bf_bpf_obj_get_info_by_fd(int fd, void *buffer, size_t buffer_len);
  * @return File descriptor of `id` on success, or a negative error value on
  *         failure.
  */
-int bf_bpf_prog_get_fd_by_id(uint32_t id);
+int bf_bpf_prog_get_fd_by_id(uint32_t id, int token_fd);
 
 /**
  * @brief Get a BPF link file descriptor based on its ID.
@@ -111,7 +111,7 @@ int bf_bpf_prog_get_fd_by_id(uint32_t id);
  * @return File descriptor of `id` on success, or a negative error value on
  *         failure.
  */
-int bf_bpf_link_get_fd_by_id(uint32_t id);
+int bf_bpf_link_get_fd_by_id(uint32_t id, int token_fd);
 
 /**
  * @brief Get a BPF map file descriptor based on its ID.
@@ -120,7 +120,7 @@ int bf_bpf_link_get_fd_by_id(uint32_t id);
  * @return File descriptor of `id` on success, or a negative error value on
  *         failure.
  */
-int bf_bpf_map_get_fd_by_id(uint32_t id);
+int bf_bpf_map_get_fd_by_id(uint32_t id, int token_fd);
 
 /**
  * Call `BPF_PROG_TEST_RUN` on @p prog_fd .
