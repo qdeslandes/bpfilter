@@ -74,7 +74,7 @@ if (NOT ${NO_DOCS})
 endif ()
 
 if (NOT ${NO_TESTS})
-    add_subdirectory(tests)
+    add_subdirectory(tests_deprecated)
 endif ()
 
 if (NOT ${NO_CHECKS})

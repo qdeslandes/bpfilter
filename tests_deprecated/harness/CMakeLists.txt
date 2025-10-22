@@ -20,7 +20,7 @@ target_include_directories(harness
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
     PUBLIC
-        ${CMAKE_SOURCE_DIR}/tests
+        ${CMAKE_SOURCE_DIR}/tests_deprecated
         ${CMAKE_SOURCE_DIR}/external/include
 )
 
