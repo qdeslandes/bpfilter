@@ -146,15 +146,17 @@ add_custom_command(
 # if it exists, or skip the report generation if it doesn't.
 add_custom_command(
 	COMMAND
-		${CMAKE_CURRENT_SOURCE_DIR}/covreport
-			--genhtml ${GENHTML_BIN}
-			--tracefile ${CMAKE_BINARY_DIR}/output/tests/lcov.out
-			--output ${CMAKE_CURRENT_BINARY_DIR}/html/external/coverage
-	DEPENDS
-		${CMAKE_CURRENT_SOURCE_DIR}/covreport
-		${CMAKE_CURRENT_BINARY_DIR}/html/index.html
+		bash -c "if [ -f ${CMAKE_BINARY_DIR}/output/tests/lcov.out ]; then \
+			${GENHTML_BIN} \
+				--output-directory ${CMAKE_CURRENT_BINARY_DIR}/html/external/coverage \
+				${CMAKE_BINARY_DIR}/output/tests/lcov.out > /dev/null; \
+		else \
+			echo 'Tracefile ${CMAKE_BINARY_DIR}/output/tests/lcov.out not found, skipping coverage report generation'; \
+		fi"
+	DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/html/index.html
 	OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/html/external/coverage/index.html
 	COMMENT "Generate the coverage report"
+	VERBATIM
 )
 
 add_custom_target(doc
