@@ -59,6 +59,22 @@ add_executable(bfcli
     ${CMAKE_CURRENT_BINARY_DIR}/generated/lexer.c   ${CMAKE_CURRENT_BINARY_DIR}/include/lexer.h
 )
 
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/generated/parser.c PROPERTIES
+    SKIP_LINTING ON
+)
+
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/include/parser.h PROPERTIES
+    SKIP_LINTING ON
+)
+
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/generated/lexer.c PROPERTIES
+    SKIP_LINTING ON
+)
+
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/include/lexer.h PROPERTIES
+    SKIP_LINTING ON
+)
+
 target_compile_definitions(bfcli
     PRIVATE
         BF_CONTACT="${BF_CONTACT}"

@@ -62,54 +62,6 @@ static void init_and_fill(bf_list *l, size_t count, const bf_list_ops *ops,
     assert_int_equal(count, bf_list_size(l));
 }
 
-Test(list, new_and_free)
-{
-    bf_list *l = NULL;
-    bf_list_ops free_ops = bf_list_ops_default(freep, NULL);
-
-    expect_assert_failure(bf_list_new(NULL, NOT_NULL));
-    expect_assert_failure(bf_list_free(NULL));
-    expect_assert_failure(bf_list_add_head(NULL, NOT_NULL));
-
-    {
-        // With noop operators
-        assert_success(bf_list_new(&l, NULL));
-        assert_int_equal(0, l->len);
-        assert_null(l->head);
-        assert_null(l->tail);
-
-        bf_list_free(&l);
-        assert_null(l);
-
-        new_and_fill(&l, 3, NULL, bf_list_add_head);
-        assert_int_equal(3, l->len);
-        assert_non_null(l->head);
-        assert_non_null(l->tail);
-
-        bf_list_free(&l);
-        assert_null(l);
-    }
-
-    {
-        // With dummy operators which allocate memory
-        bf_list_new(&l, &free_ops);
-        assert_int_equal(0, l->len);
-        assert_null(l->head);
-        assert_null(l->tail);
-
-        bf_list_free(&l);
-        assert_null(l);
-
-        new_and_fill(&l, 3, &free_ops, dummy_filler_head);
-        assert_int_equal(3, l->len);
-        assert_non_null(l->head);
-        assert_non_null(l->tail);
-
-        bf_list_free(&l);
-        assert_null(l);
-    }
-}
-
 Test(list, init_and_clean)
 {
     bf_list l;
@@ -169,37 +121,6 @@ Test(list, init_and_clean)
         assert_null(l.head);
         assert_null(l.tail);
     }
-}
-
-Test(list, pack_unpack)
-{
-    _free_bf_list_ bf_list *l0 = NULL;
-    _clean_bf_list_ bf_list l1 = bf_list_default(freep, bft_list_dummy_data_pack);
-    _free_bf_wpack_ bf_wpack_t *wpack = NULL;
-    _free_bf_rpack_ bf_rpack_t *rpack = NULL;
-    bf_rpack_node_t list_node, list_elem_node;
-    const void *data;
-    size_t data_len;
-
-    expect_assert_failure(bf_list_pack(NULL, NOT_NULL));
-    expect_assert_failure(bf_list_pack(NOT_NULL, NULL));
-
-    assert_non_null(l0 = bft_list_get(10, 50));
-
-    assert_success(bf_wpack_new(&wpack));
-    bf_wpack_open_array(wpack, "list");
-    assert_success(bf_list_pack(l0, wpack));
-    bf_wpack_close_array(wpack);
-    assert_success(bf_wpack_get_data(wpack, &data, &data_len));
-
-    assert_success(bf_rpack_new(&rpack, data, data_len));
-    assert_success(bf_rpack_kv_array(bf_rpack_root(rpack), "list", &list_node));
-    bf_rpack_array_foreach (list_node, list_elem_node) {
-        _cleanup_free_ struct bft_list_dummy_data *data = NULL;
-        assert_success(bf_list_emplace(&l1, bft_list_dummy_data_new_from_pack, data, list_elem_node));
-    }
-
-    assert_true(bft_list_eq(l0, &l1, (bft_list_eq_cb)bft_list_dummy_data_compare));
 }
 
 Test(list, fill_from_head_and_check)

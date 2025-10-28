@@ -11,7 +11,7 @@ file(GLOB_RECURSE bf_srcs
     ${CMAKE_SOURCE_DIR}/src/bpfilter/*.h        ${CMAKE_SOURCE_DIR}/src/bpfilter/*.c
     ${CMAKE_SOURCE_DIR}/src/libbpfilter/*.h     ${CMAKE_SOURCE_DIR}/src/libbpfilter/*.c
     ${CMAKE_SOURCE_DIR}/src/bfcli/*.h           ${CMAKE_SOURCE_DIR}/src/bfcli/*.c
-    ${CMAKE_SOURCE_DIR}/tests/harness/*.h       ${CMAKE_SOURCE_DIR}/tests/harness/*.c
+    ${CMAKE_SOURCE_DIR}/tests/*.h               ${CMAKE_SOURCE_DIR}/tests/*.c
 )
 list(FILTER bf_srcs EXCLUDE REGEX "src/bpfilter/xlate/nft/nfmsg.*")
 list(FILTER bf_srcs EXCLUDE REGEX "src/bpfilter/xlate/nft/nfgroup.*")

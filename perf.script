@@ -1,0 +1,330 @@
+udp_sport.sh_ 1 0.001693010: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.003386021: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.005079031: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.005845070: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.007538080: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.009231091: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.010445595: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.012138605: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.013831615: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.013996601: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq -40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.015689611: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq -40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.017300606: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0x40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.018993616: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0x40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.019715548: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq -0x00 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.021408558: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq -0x00 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.021688461: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 75000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.023381472: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 75000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.023640871: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0xffffff counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.025333881: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq 0xffffff counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.025573730: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq not_a_port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.027266741: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport eq not_a_port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.027326584: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.029019594: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.029045105: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.030738115: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.032431126: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.032549620: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not -40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.034242630: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not -40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.034447908: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0x40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.036140919: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0x40 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.036347389: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not -0x00 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.038040400: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not -0x00 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.038238049: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 75000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.039931059: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 75000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.040183544: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0xffffff counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.041876554: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not 0xffffff counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.042138338: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not not_a_port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.043831348: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport not not_a_port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.043909311: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0-0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.045602322: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0-0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.045642853: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0-65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.047335863: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0-65535 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.047336817: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 17-30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.049029827: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 17-30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.049177408: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.050870419: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.051130295: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 20-10 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.052823305: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 20-10 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.053107977: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 10-20-30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.054800987: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 10-20-30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.055052280: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 10000000-1000000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.056745291: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 10000000-1000000 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.057013750: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x20 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.058706760: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x20 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.058982134: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x20-0x30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.060675144: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x20-0x30 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.061029673: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x30-0x20 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.062722683: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range 0x30-0x20 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.063132286: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range -1-4 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.064825296: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range -1-4 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.065118790: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range -1--4 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.066811800: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range -1--4 counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.067090988: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range not-port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.068783998: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range not-port counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.069068193: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range notport counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+
+udp_sport.sh_ 1 0.070761204: 1 cycles:
+	1234 bfcli ruleset set --dry-run --from-str 'chain xdp BF_HOOK_XDP ACCEPT rule udp.sport range notport counter DROP' ([udp_sport.sh])
+	1234 udp_sport.sh {}
+
+

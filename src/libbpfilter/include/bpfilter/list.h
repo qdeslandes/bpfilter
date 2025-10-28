@@ -256,6 +256,8 @@ static inline bool bf_list_is_empty(const bf_list *list)
 /**
  * Check if @p node is the head of @p list.
  *
+ * @todo Allow `node` to be `NULL`.
+ *
  * @param list List. Must be non NULL.
  * @param node Node. Must be non NULL.
  * @return True if @p node is the head of @p list, false otherwise.
@@ -271,6 +273,8 @@ static inline bool bf_list_is_head(const bf_list *list,
 
 /**
  * Check if @p node is the tail of @p list.
+ *
+ * @todo Allow `node` to be `NULL`.
  *
  * @param list List. Must be non NULL.
  * @param node Node. Must be non NULL.

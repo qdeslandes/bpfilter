@@ -52,6 +52,14 @@ add_executable(bpfilter
     ${CMAKE_SOURCE_DIR}/src/external/include/disasm.h   ${CMAKE_SOURCE_DIR}/src/external/disasm.c
 )
 
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/external/include/disasm.h PROPERTIES
+    SKIP_LINTING ON
+)
+
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/external/disasm.c PROPERTIES
+    SKIP_LINTING ON
+)
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/cgen)
 bf_target_add_elfstubs(bpfilter
     DIR ${CMAKE_CURRENT_SOURCE_DIR}/bpf

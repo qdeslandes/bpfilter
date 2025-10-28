@@ -25,6 +25,7 @@ option(NO_DOCS "Disable documentation generation" 0)
 option(NO_TESTS "Disable unit, end-to-end, and integration tests" 0)
 option(NO_CHECKS "Disable the check target (clang-tidy and clang-format" 0)
 option(NO_BENCHMARKS "Disable the benchmark" 0)
+option(ENABLE_COVERAGE "Build with code coverage support. Disabled by default" 0)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -53,6 +54,7 @@ add_library(bf_global_flags INTERFACE)
 target_compile_options(bf_global_flags
     INTERFACE
         -std=gnu17 -Wall -Wextra -fPIC
+        $<$<BOOL:${ENABLE_COVERAGE}>:-fprofile-arcs -ftest-coverage>
         $<$<CONFIG:debug>:-O0 -g3 -ggdb -fno-omit-frame-pointer -fsanitize=address -fsanitize=undefined>
         $<$<CONFIG:release>:-O2>
 )
@@ -62,6 +64,7 @@ target_include_directories(bf_global_flags
 )
 target_link_options(bf_global_flags
     INTERFACE
+        $<$<BOOL:${ENABLE_COVERAGE}>:-fprofile-arcs -ftest-coverage>
         $<$<CONFIG:debug>:-fsanitize=address -fsanitize=undefined>
 )
 
@@ -74,7 +77,10 @@ if (NOT ${NO_DOCS})
 endif ()
 
 if (NOT ${NO_TESTS})
-    add_subdirectory(tests_deprecated)
+    set(CMAKE_CTEST_ARGUMENTS "--output-on-failure")
+    add_custom_target(test_bin)
+    enable_testing()
+    add_subdirectory(tests)
 endif ()
 
 if (NOT ${NO_CHECKS})

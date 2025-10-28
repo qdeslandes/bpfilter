@@ -1,6 +1,14 @@
 Tests
 =====
 
+Testing is critical to maintain bpfilter's stability. Different test modules are defined to cover all the features for the library, the daemon, and the CLI.
+
+bpfilter rely on CMake's CTest to run the various tests. Tests are split into different groups (defined using CTest's labels):
+- ``unit``: unit tests for libbpfilter. The library is tested as a black box.
+- ``e2e``: end-to-end tests for both bfcli and bpfilter.
+
+Use `-DENABLE_COVERAGE=1` to buid with coverage support.
+
 Test harness
 ------------
 
@@ -9,28 +17,6 @@ The test harness is a set of convenience functions used to ease testing of ``bpf
 Test
 ~~~~
 .. doxygenfile:: test.h
-
-Mocks
-~~~~~
-.. doxygenfile:: mock.h
-
-Process
-~~~~~~~
-.. doxygenfile:: process.h
-
-Daemon
-~~~~~~~
-.. doxygenfile:: daemon.h
-
-.. _tests-filters-label:
-
-Filters
-~~~~~~~
-.. doxygenfile:: filters.h
-
-Program
-~~~~~~~
-.. doxygenfile:: prog.h
 
 
 Unit tests
@@ -58,8 +44,7 @@ Similarly to the benchmarks (``make benchmark``), ``sudo`` will be used automati
 
 End-to-end tests are defined in ``tests/e2e`` and use ``cmocka`` as the testing library. To add a new end-to-end test:
 
-1. Add a new ``cmocka`` test in a source file under ``tests/e2e``.
-2. Create a chain: use the primitives in :ref:`tests-filters-label` to easily create chains, rules, and matchers. :c:struct:`bf_test_chain_get` will automatically disable attachment of the chain and generate a custom name for the BPF program prefixed with ``bf_e2e_``.
+1. Add a new ``cmocka`` test in a source file under ``tests/e2e``.create chains, rules, and matchers. :c:struct:`bf_test_chain_get` will automatically disable attachment of the chain and generate a custom name for the BPF program prefixed with ``bf_e2e_``.
 3. Run the test using :c:func:`bft_e2e_test` with the chain, the expected return value, and the generated packet name.
 
 **Example**
