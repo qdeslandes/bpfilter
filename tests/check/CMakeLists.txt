@@ -39,6 +39,7 @@ add_test(NAME "check.checkstyle"
         ${CLANG_FORMAT_BIN}
             --style=file:${CMAKE_SOURCE_DIR}/.clang-format
             --dry-run
+            -Werror
             ${bf_srcs}
 )
 
@@ -73,6 +74,11 @@ add_test(NAME "check.iwyu"
 
 set_tests_properties("check.iwyu" PROPERTIES
     LABELS "check"
+)
+
+add_custom_target(check.style
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R check.checkstyle
+    COMMENT "Checking style for all the source files"
 )
 
 add_custom_target(fixstyle
