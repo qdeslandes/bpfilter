@@ -65,12 +65,12 @@ int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
         return -ENOMEM;
 
     _cgen->front = front;
-    _cgen->chain = TAKE_PTR(*chain);
 
-    r = bf_handle_new(&_cgen->handle, _BF_PROG_NAME);
+    r = bf_handle_new(&_cgen->handle, (*chain)->name);
     if (r)
         return r;
 
+    _cgen->chain = TAKE_PTR(*chain);
     *cgen = TAKE_PTR(_cgen);
 
     return 0;
@@ -104,11 +104,9 @@ int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
     r = bf_rpack_kv_node(node, "handle", &child);
     if (r)
         return bf_rpack_key_err(r, "bf_cgen.handle");
-    if (!bf_rpack_is_nil(child)) {
-        r = bf_handle_new_from_dir(&_cgen->handle, _cgen->chain->name, child);
-        if (r)
-            return r;
-    }
+    r = bf_handle_new_from_dir(&_cgen->handle, _cgen->chain->name, child);
+    if (r)
+        return r;
 
     *cgen = TAKE_PTR(_cgen);
 
@@ -166,7 +164,6 @@ void bf_cgen_dump(const struct bf_cgen *cgen, prefix_t *prefix)
     bf_dump_prefix_push(prefix);
     DUMP(prefix, "front: %s", bf_front_to_str(cgen->front));
 
-    // Chain
     DUMP(prefix, "chain: struct bf_chain *");
     bf_dump_prefix_push(prefix);
     bf_chain_dump(cgen->chain, bf_dump_prefix_last(prefix));
@@ -205,7 +202,6 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
                 struct bf_hookopts **hookopts)
 {
     _free_bf_program_ struct bf_program *prog = NULL;
-    _free_bf_handle_ struct bf_handle *handle = NULL;
     int r;
 
     assert(cgen);
@@ -236,7 +232,7 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
     }
 
     if (bf_opts_persist()) {
-        r = bf_handle_pin(handle);
+        r = bf_handle_pin(cgen->handle);
         if (r)
             return r;
     }
@@ -247,7 +243,6 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
 int bf_cgen_load(struct bf_cgen *cgen)
 {
     _free_bf_program_ struct bf_program *prog = NULL;
-    _free_bf_handle_ struct bf_handle *handle = NULL;
     int r;
 
     assert(cgen);
@@ -265,7 +260,7 @@ int bf_cgen_load(struct bf_cgen *cgen)
         return bf_err_r(r, "failed to load the chain");
 
     if (bf_opts_persist()) {
-        r = bf_handle_pin(handle);
+        r = bf_handle_pin(cgen->handle);
         if (r)
             return r;
     }
@@ -321,7 +316,6 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
 int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
 {
     _free_bf_program_ struct bf_program *new_prog = NULL;
-    _free_bf_handle_ struct bf_handle *new_handle = NULL;
     struct bf_handle *old_handle;
     int r;
 
@@ -330,7 +324,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
 
     old_handle = cgen->handle;
 
-    r = bf_program_new(&new_prog, *new_chain, new_handle);
+    r = bf_program_new(&new_prog, *new_chain, cgen->handle);
     if (r < 0)
         return bf_err_r(r, "failed to create a new bf_program");
 
@@ -348,7 +342,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
         bf_handle_unpin(old_handle);
 
     if (old_handle->link) {
-        r = bf_link_update(old_handle->link, new_handle->prog_fd);
+        r = bf_link_update(old_handle->link, new_prog->handle->prog_fd);
         if (r) {
             bf_err_r(r, "failed to update bf_link object with new program");
             if (bf_opts_persist() && bf_handle_pin(old_handle) < 0)
@@ -357,16 +351,14 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
         }
 
         // We updated the old link, we need to store it in the new handle
-        bf_swap(new_handle->link, old_handle->link);
+        bf_swap(new_prog->handle->link, old_handle->link);
     }
 
     if (bf_opts_persist()) {
-        r = bf_handle_pin(new_handle);
+        r = bf_handle_pin(new_prog->handle);
         if (r)
             bf_warn_r(r, "failed to pin new handle, ignoring");
     }
-
-    bf_swap(cgen->handle, new_handle);
 
     bf_chain_free(&cgen->chain);
     cgen->chain = TAKE_PTR(*new_chain);
