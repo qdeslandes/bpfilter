@@ -33,8 +33,8 @@ struct bf_counter;
  */
 struct bf_handle
 {
-    /** BPF program name, used as filename when pinning. */
-    char prog_name[BPF_OBJ_NAME_LEN];
+    /** Name of the chain. */
+    const char *name;
 
     /** File descriptor of the loaded BPF program. -1 if not loaded. */
     int prog_fd;
@@ -62,11 +62,10 @@ struct bf_handle
  * @brief Allocate and initialize a new bf_handle object.
  *
  * @param handle `bf_handle` object to allocate and initialize. Can't be NULL.
- * @param prog_name Name of the BPF program. Used as filename when pinning.
- *        Can't be NULL or empty.
+ * @param name Name of the chain. Can't be NULL or empty.
  * @return 0 on success, or a negative errno value on failure.
  */
-int bf_handle_new(struct bf_handle **handle, const char *prog_name);
+int bf_handle_new(struct bf_handle **handle, const char *name);
 
 /**
  * @brief Allocate and initialize a bf_handle from serialized data.
@@ -93,6 +92,9 @@ void bf_handle_free(struct bf_handle **handle);
 
 /**
  * @brief Serialize a bf_handle.
+ *
+ * Only serializes the chain's name (for pin path restoration). The actual BPF
+ * objects are restored from pins, not from serialized data.
  *
  * @param handle Handle to serialize. Can't be NULL.
  * @param pack bf_wpack_t object to serialize the handle into. Can't be NULL.

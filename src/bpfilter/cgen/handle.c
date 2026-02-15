@@ -26,20 +26,24 @@
 #include "cgen/prog/link.h"
 #include "cgen/prog/map.h"
 
+#define _BF_PROG_NAME "bf_prog"
 #define _BF_LINK_NAME "bf_link"
 
-int bf_handle_new(struct bf_handle **handle, const char *prog_name)
+int bf_handle_new(struct bf_handle **handle, const char *name)
 {
     _free_bf_handle_ struct bf_handle *_handle = NULL;
 
     assert(handle);
-    assert(prog_name);
+    assert(name);
 
     _handle = calloc(1, sizeof(*_handle));
     if (!_handle)
         return -ENOMEM;
 
-    (void)snprintf(_handle->prog_name, BPF_OBJ_NAME_LEN, "%s", prog_name);
+    _handle->name = strdup(name);
+    if (!_handle->name)
+        return -ENOMEM;
+
     _handle->prog_fd = -1;
     _handle->sets = bf_list_default(bf_map_free, bf_map_pack);
 
@@ -63,10 +67,7 @@ int bf_handle_new_from_pack(struct bf_handle **handle, int dir_fd,
 
     assert(handle);
 
-    if (dir_fd < 0)
-        return bf_err_r(-EBADFD, "invalid directory FD");
-
-    r = bf_rpack_kv_str(node, "prog_name", &name);
+    r = bf_rpack_kv_str(node, "name", &name);
     if (r)
         return bf_rpack_key_err(r, "bf_handle.name");
 
@@ -74,7 +75,7 @@ int bf_handle_new_from_pack(struct bf_handle **handle, int dir_fd,
     if (r)
         return r;
 
-    r = bf_bpf_obj_get(_handle->prog_name, dir_fd, &_handle->prog_fd);
+    r = bf_bpf_obj_get(_BF_PROG_NAME, dir_fd, &_handle->prog_fd);
     if (r < 0)
         return bf_err_r(r, "failed to restore bf_handle.prog_fd from pin");
 
@@ -184,7 +185,7 @@ int bf_handle_pack(const struct bf_handle *handle, bf_wpack_t *pack)
     assert(handle);
     assert(pack);
 
-    bf_wpack_kv_str(pack, "prog_name", handle->prog_name);
+    bf_wpack_kv_str(pack, "name", handle->name);
 
     if (handle->link) {
         bf_wpack_open_object(pack, "hookopts");
@@ -206,7 +207,7 @@ void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix)
 
     bf_dump_prefix_push(prefix);
 
-    DUMP(prefix, "prog_name: %s", handle->prog_name);
+    DUMP(prefix, "name: %s", handle->name);
     DUMP(prefix, "prog_fd: %d", handle->prog_fd);
 
     if (handle->link) {
@@ -272,7 +273,7 @@ int bf_handle_pin(struct bf_handle *handle, int dir_fd)
 
     assert(handle);
 
-    r = bf_bpf_obj_pin(handle->prog_name, handle->prog_fd, dir_fd);
+    r = bf_bpf_obj_pin(_BF_PROG_NAME, handle->prog_fd, dir_fd);
     if (r) {
         bf_err_r(r, "failed to pin BPF program");
         goto err_unpin_all;
@@ -300,7 +301,7 @@ void bf_handle_unpin(struct bf_handle *handle, int dir_fd)
     if (handle->link)
         bf_link_unpin(handle->link, dir_fd);
 
-    unlinkat(dir_fd, handle->prog_name, 0);
+    unlinkat(dir_fd, _BF_PROG_NAME, 0);
 }
 
 int bf_handle_get_counter(const struct bf_handle *handle, uint32_t counter_idx,

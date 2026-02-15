@@ -65,10 +65,6 @@
 #define _BF_LOG_MAP_N_ENTRIES 1000
 #define _BF_LOG_MAP_SIZE                                                       \
     _bf_round_next_power_of_2(sizeof(struct bf_log) * _BF_LOG_MAP_N_ENTRIES)
-#define _BF_SET_MAP_PREFIX "bf_set_"
-#define _BF_COUNTER_MAP_NAME "bf_cmap"
-#define _BF_PRINTER_MAP_NAME "bf_pmap"
-#define _BF_LOG_MAP_NAME "bf_lmap"
 
 static inline size_t _bf_round_next_power_of_2(size_t value)
 {
