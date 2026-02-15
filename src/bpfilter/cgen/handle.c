@@ -19,6 +19,7 @@
 #include <bpfilter/dump.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/hook.h>
+#include <bpfilter/io.h>
 #include <bpfilter/list.h>
 #include <bpfilter/logger.h>
 #include <bpfilter/pack.h>
@@ -28,6 +29,31 @@
 
 #define _BF_PROG_NAME "bf_prog"
 #define _BF_LINK_NAME "bf_link"
+
+/**
+ * @brief Open a file descriptor to the handle's pin directory.
+ *
+ * @param name Name of the runtime context to open. Can't be NULL.
+ * @return Handle to chain `name` pin directory, or a negative errno value on
+ *         failure.
+ */
+static int _bf_handle_get_fd(const char *name)
+{
+    _cleanup_close_ int bf_fd = -1;
+    _cleanup_close_ int chain_fd = -1;
+
+    assert(name);
+
+    bf_fd = bf_ctx_get_pindir_fd();
+    if (bf_fd < 0)
+        return bf_fd;
+
+    chain_fd = bf_opendir_at(bf_fd, name, true);
+    if (chain_fd < 0)
+        return chain_fd;
+
+    return TAKE_FD(chain_fd);
+}
 
 int bf_handle_new(struct bf_handle **handle, const char *name)
 {
@@ -52,24 +78,27 @@ int bf_handle_new(struct bf_handle **handle, const char *name)
     return 0;
 }
 
-int bf_handle_new_from_pack(struct bf_handle **handle, int dir_fd,
-                            bf_rpack_node_t node)
+int bf_handle_new_from_dir(struct bf_handle **handle, const char *name,
+                           bf_rpack_node_t node)
 {
     _free_bf_hookopts_ struct bf_hookopts *hookopts = NULL;
     _free_bf_handle_ struct bf_handle *_handle = NULL;
     _cleanup_free_ uint32_t *map_ids = NULL;
     _cleanup_close_ int link_fd = -1;
     _cleanup_close_ int link_extra_fd = -1;
-    _cleanup_free_ char *name = NULL;
+    _cleanup_close_ int dir_fd = -1;
     struct bpf_prog_info prog_info = {};
     bf_rpack_node_t child;
     int r;
 
     assert(handle);
+    assert(name);
 
-    r = bf_rpack_kv_str(node, "name", &name);
-    if (r)
-        return bf_rpack_key_err(r, "bf_handle.name");
+    dir_fd = _bf_handle_get_fd(name);
+    if (dir_fd < 0) {
+        return bf_err_r(dir_fd, "bf_handle: %s: failed to open pin directory",
+                        name);
+    }
 
     r = bf_handle_new(&_handle, name);
     if (r)
@@ -267,11 +296,18 @@ void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix)
     bf_dump_prefix_pop(prefix);
 }
 
-int bf_handle_pin(struct bf_handle *handle, int dir_fd)
+int bf_handle_pin(struct bf_handle *handle)
 {
+    _cleanup_close_ int dir_fd = -1;
     int r;
 
     assert(handle);
+
+    dir_fd = _bf_handle_get_fd(handle->name);
+    if (dir_fd < 0) {
+        return bf_err_r(dir_fd, "bf_handle: %s: failed to open pin directory",
+                        handle->name);
+    }
 
     r = bf_bpf_obj_pin(_BF_PROG_NAME, handle->prog_fd, dir_fd);
     if (r) {
@@ -290,13 +326,23 @@ int bf_handle_pin(struct bf_handle *handle, int dir_fd)
     return 0;
 
 err_unpin_all:
-    bf_handle_unpin(handle, dir_fd);
+    closep(&dir_fd);
+    bf_handle_unpin(handle);
     return r;
 }
 
-void bf_handle_unpin(struct bf_handle *handle, int dir_fd)
+void bf_handle_unpin(struct bf_handle *handle)
 {
+    _cleanup_close_ int dir_fd = -1;
+
     assert(handle);
+
+    dir_fd = _bf_handle_get_fd(handle->name);
+    if (dir_fd < 0) {
+        bf_warn_r(dir_fd, "bf_handle: %s: failed to open pin directory",
+                  handle->name);
+        return;
+    }
 
     if (handle->link)
         bf_link_unpin(handle->link, dir_fd);

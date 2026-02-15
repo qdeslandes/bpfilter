@@ -71,13 +71,12 @@ int bf_handle_new(struct bf_handle **handle, const char *name);
  * @brief Allocate and initialize a bf_handle from serialized data.
  *
  * @param handle `bf_handle` object to allocate and initialize. Can't be NULL.
- * @param dir_fd File descriptor of the directory containing the pinned objects.
- *        Must be a valid file descriptor.
+ * @param name Name of the chain to restore the context for. Can't be NULL.
  * @param node Node containing the serialized handle data.
  * @return 0 on success, or a negative errno value on failure.
  */
-int bf_handle_new_from_pack(struct bf_handle **handle, int dir_fd,
-                            bf_rpack_node_t node);
+int bf_handle_new_from_dir(struct bf_handle **handle, const char *name,
+                           bf_rpack_node_t node);
 
 /**
  * @brief Free a `bf_handle` object.
@@ -113,24 +112,21 @@ void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix);
 /**
  * @brief Pin the BPF objects to the filesystem.
  *
- * Pins the program and all maps/link to the directory specified by `dir_fd`.
+ * Pins the program and all maps/link in the directory named after the chain's
+ * name within `bf_ctx_get_pindir_fd`.
  * The link is only pinned if the program is attached.
  *
  * @param handle Handle containing the BPF objects to pin. Can't be NULL.
- * @param dir_fd File descriptor of the directory to pin into.
  * @return 0 on success, or a negative errno value on failure.
  */
-int bf_handle_pin(struct bf_handle *handle, int dir_fd);
+int bf_handle_pin(struct bf_handle *handle);
 
 /**
  * @brief Unpin the BPF objects from the filesystem.
  *
- * Unpins all BPF objects from the directory. This function never fails.
- *
  * @param handle Handle containing the BPF objects to unpin. Can't be NULL.
- * @param dir_fd File descriptor of the directory containing the pins.
  */
-void bf_handle_unpin(struct bf_handle *handle, int dir_fd);
+void bf_handle_unpin(struct bf_handle *handle);
 
 /**
  * @brief Get a counter value from the handle's counters map.
