@@ -30,6 +30,7 @@ static const char *_bf_map_type_strs[] = {
     [BF_MAP_TYPE_PRINTER] = "BF_MAP_TYPE_PRINTER",
     [BF_MAP_TYPE_LOG] = "BF_MAP_TYPE_LOG",
     [BF_MAP_TYPE_SET] = "BF_MAP_TYPE_SET",
+    [BF_MAP_TYPE_CTX] = "BF_MAP_TYPE_CTX",
 };
 static_assert(ARRAY_SIZE(_bf_map_type_strs) == _BF_MAP_TYPE_MAX,
               "missing entries in _bf_map_type_strs array");
@@ -124,6 +125,13 @@ static int _bf_btf_new(struct bf_btf **btf, const struct bf_map *map)
          * values. */
         _btf->key_type_id =
             btf__add_struct(raw, "placeholder_key", map->key_size);
+        _btf->value_type_id =
+            btf__add_struct(raw, "placeholder_value", map->value_size);
+        break;
+    case BF_MAP_TYPE_CTX:
+        /* Ctx maps are array maps: keys are an integer type, and values are
+         * a placeholder struct holding the serialized chain data. */
+        _btf->key_type_id = btf__add_int(raw, "placeholder_key", 4, 0);
         _btf->value_type_id =
             btf__add_struct(raw, "placeholder_value", map->value_size);
         break;
@@ -229,6 +237,7 @@ int bf_map_new(struct bf_map **map, const char *name, enum bf_map_type type,
         [BF_MAP_TYPE_COUNTERS] = BF_BPF_MAP_TYPE_ARRAY,
         [BF_MAP_TYPE_PRINTER] = BF_BPF_MAP_TYPE_ARRAY,
         [BF_MAP_TYPE_LOG] = BF_BPF_MAP_TYPE_RINGBUF,
+        [BF_MAP_TYPE_CTX] = BF_BPF_MAP_TYPE_ARRAY,
     };
 
     assert(map);

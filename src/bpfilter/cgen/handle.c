@@ -9,12 +9,15 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <libgen.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include <bpfilter/bpf.h>
+#include <bpfilter/chain.h>
 #include <bpfilter/counter.h>
 #include <bpfilter/dump.h>
 #include <bpfilter/helper.h>
@@ -79,7 +82,7 @@ int bf_handle_new(struct bf_handle **handle, const char *name)
 }
 
 int bf_handle_new_from_dir(struct bf_handle **handle, const char *name,
-                           bf_rpack_node_t node)
+                           struct bf_chain **chain)
 {
     _free_bf_hookopts_ struct bf_hookopts *hookopts = NULL;
     _free_bf_handle_ struct bf_handle *_handle = NULL;
@@ -108,26 +111,71 @@ int bf_handle_new_from_dir(struct bf_handle **handle, const char *name,
     if (r < 0)
         return bf_err_r(r, "failed to restore bf_handle.prog_fd from pin");
 
-    r = bf_rpack_kv_node(node, "hookopts", &child);
-    if (r)
-        return bf_rpack_key_err(r, "bf_handle.hookopts");
-    if (!bf_rpack_is_nil(child)) {
-        r = bf_hookopts_new_from_pack(&hookopts, child);
+    // Restore the context map
+    {
+        _cleanup_close_ int xmap_fd = -1;
+
+        r = bf_bpf_obj_get("ctx_map", dir_fd, &xmap_fd);
+        if (r == 0) {
+            r = bf_map_new_from_fd(&_handle->xmap, xmap_fd);
+            if (r)
+                return bf_err_r(r, "failed to restore ctx map from pin");
+        } else if (r != -ENOENT) {
+            return bf_err_r(r, "failed to open pinned ctx map");
+        }
+    }
+
+    // Restore the link + hookopts if any
+    {
+        _free_bf_hookopts_ struct bf_hookopts *hookopts = NULL;
+        _free_bf_rpack_ bf_rpack_t *rpack = NULL;
+        _cleanup_free_ void *value = NULL;
+        bf_rpack_node_t node;
+        uint32_t key = 0;
+        int r;
+
+        value = malloc(_handle->xmap->value_size);
+        if (!value)
+            return -ENOMEM;
+
+        r = bf_bpf_map_lookup_elem(_handle->xmap->fd, &key, value);
+        if (r < 0)
+            return bf_err_r(errno, "failed to read ctx map");
+
+        r = bf_rpack_new(&rpack, value, _handle->xmap->value_size);
+        if (r)
+            return bf_err_r(r, "failed to create rpack from ctx map data");
+
+        node = bf_rpack_root(rpack);
+
+        r = bf_rpack_kv_node(node, "chain", &child);
+        if (r)
+            return bf_rpack_key_err(r, "bf_handle.chain");
+        r = bf_chain_new_from_pack(chain, child);
+        if (r)
+            return bf_err_r(r, "failed to restore chain");
+
+        r = bf_rpack_kv_node(node, "hookopts", &child);
         if (r)
             return bf_rpack_key_err(r, "bf_handle.hookopts");
+        if (!bf_rpack_is_nil(child)) {
+            r = bf_hookopts_new_from_pack(&hookopts, child);
+            if (r)
+                return bf_rpack_key_err(r, "bf_handle.hookopts");
 
-        r = bf_bpf_obj_get("bf_link", dir_fd, &link_fd);
-        if (r)
-            return bf_err_r(r, "failed to open chain's link");
+            r = bf_bpf_obj_get("bf_link", dir_fd, &link_fd);
+            if (r)
+                return bf_err_r(r, "failed to open chain's link");
 
-        r = bf_bpf_obj_get("bf_link_extra", dir_fd, &link_extra_fd);
-        if (r != 0 && r != -ENOENT)
-            return bf_err_r(r, "failed to open chain's link extra");
+            r = bf_bpf_obj_get("bf_link_extra", dir_fd, &link_extra_fd);
+            if (r != 0 && r != -ENOENT)
+                return bf_err_r(r, "failed to open chain's link extra");
 
-        r = bf_link_new_from_fd(&_handle->link, &hookopts, link_fd,
-                                link_extra_fd);
-        if (r)
-            return bf_err_r(r, "failed to restore bf_link");
+            r = bf_link_new_from_fd(&_handle->link, &hookopts, link_fd,
+                                    link_extra_fd);
+            if (r)
+                return bf_err_r(r, "failed to restore bf_link");
+        }
     }
 
     r = bf_bpf_obj_get_info(_handle->prog_fd, &prog_info, sizeof(prog_info));
@@ -197,16 +245,17 @@ void bf_handle_free(struct bf_handle **handle)
     if (!*handle)
         return;
 
+    freep((void *)&(*handle)->name);
     closep(&(*handle)->prog_fd);
 
     bf_link_free(&(*handle)->link);
     bf_map_free(&(*handle)->cmap);
     bf_map_free(&(*handle)->pmap);
     bf_map_free(&(*handle)->lmap);
+    bf_map_free(&(*handle)->xmap);
     bf_list_clean(&(*handle)->sets);
 
-    free(*handle);
-    *handle = NULL;
+    freep((void *)handle);
 }
 
 int bf_handle_pack(const struct bf_handle *handle, bf_wpack_t *pack)
@@ -275,8 +324,16 @@ void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix)
         DUMP(prefix, "lmap: struct bf_map * (NULL)");
     }
 
-    DUMP(bf_dump_prefix_last(prefix), "sets: bf_list<bf_map>[%lu]",
-         bf_list_size(&handle->sets));
+    if (handle->xmap) {
+        DUMP(prefix, "xmap: struct bf_map *");
+        bf_dump_prefix_push(prefix);
+        bf_map_dump(handle->xmap, bf_dump_prefix_last(prefix));
+        bf_dump_prefix_pop(prefix);
+    } else {
+        DUMP(prefix, "xmap: struct bf_map * (NULL)");
+    }
+
+    DUMP(prefix, "sets: bf_list<bf_map>[%lu]", bf_list_size(&handle->sets));
     bf_dump_prefix_push(prefix);
     bf_list_foreach (&handle->sets, map_node) {
         struct bf_map *map = bf_list_node_get_data(map_node);
@@ -323,6 +380,14 @@ int bf_handle_pin(struct bf_handle *handle)
         }
     }
 
+    if (handle->xmap) {
+        r = bf_map_pin(handle->xmap, dir_fd);
+        if (r) {
+            bf_err_r(r, "failed to pin ctx map");
+            goto err_unpin_all;
+        }
+    }
+
     return 0;
 
 err_unpin_all:
@@ -346,6 +411,8 @@ void bf_handle_unpin(struct bf_handle *handle)
 
     if (handle->link)
         bf_link_unpin(handle->link, dir_fd);
+    if (handle->xmap)
+        bf_map_unpin(handle->xmap, dir_fd);
 
     unlinkat(dir_fd, _BF_PROG_NAME, 0);
 }
@@ -400,21 +467,47 @@ void bf_handle_detach(struct bf_handle *handle)
     bf_link_free(&handle->link);
 }
 
-void bf_handle_unload(struct bf_handle *handle)
+int bf_handle_persist_context(struct bf_handle *handle,
+                              const struct bf_chain *chain)
 {
+    _free_bf_map_ struct bf_map *map = NULL;
+    _free_bf_wpack_ bf_wpack_t *wpack = NULL;
+    const void *data;
+    size_t data_len;
+    uint32_t key = 0;
+    int r;
+
     assert(handle);
+    assert(chain);
 
-    closep(&handle->prog_fd);
+    r = bf_wpack_new(&wpack);
+    if (r)
+        return bf_err_r(r, "failed to create wpack for ctx map");
 
-    /* Explicitly detach the BPF link before closing it. Relying solely on
-     * close() is not sufficient when the link is pinned (the pin holds a
-     * kernel reference that keeps the link alive). Using BPF_LINK_DETACH
-     * ensures the program is removed from the hook immediately. */
-    bf_handle_detach(handle);
+    bf_wpack_open_object(wpack, "chain");
+    bf_chain_pack(chain, wpack);
+    bf_wpack_close_object(wpack);
 
-    bf_link_free(&handle->link);
-    bf_map_free(&handle->cmap);
-    bf_map_free(&handle->pmap);
-    bf_map_free(&handle->lmap);
-    bf_list_clean(&handle->sets);
+    if (handle->link) {
+        bf_wpack_open_object(wpack, "hookopts");
+        bf_hookopts_pack(handle->link->hookopts, wpack);
+        bf_wpack_close_object(wpack);
+    } else {
+        bf_wpack_kv_nil(wpack, "hookopts");
+    }
+
+    r = bf_wpack_get_data(wpack, &data, &data_len);
+    if (r)
+        return bf_err_r(r, "failed to get serialized chain data");
+
+    r = bf_map_new(&handle->xmap, "ctx_map", BF_MAP_TYPE_CTX, sizeof(uint32_t),
+                   data_len, 1);
+    if (r)
+        return bf_err_r(r, "failed to create the ctx bf_map object");
+
+    r = bf_map_set_elem(handle->xmap, &key, (void *)data);
+    if (r)
+        return bf_err_r(r, "failed to set ctx map elem");
+
+    return 0;
 }

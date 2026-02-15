@@ -12,6 +12,7 @@
 #include <bpfilter/list.h>
 #include <bpfilter/pack.h>
 
+struct bf_chain;
 struct bf_link;
 struct bf_map;
 struct bf_counter;
@@ -51,6 +52,9 @@ struct bf_handle
     /** Log map. NULL if not created. */
     struct bf_map *lmap;
 
+    /** Context map, stores serialized chain data. NULL if not created. */
+    struct bf_map *xmap;
+
     /** List of set maps. If a set is empty in the chain, NULL is inserted in
      * this list instead of a `bf_map` to preserve sets indexes. */
     bf_list sets;
@@ -76,7 +80,7 @@ int bf_handle_new(struct bf_handle **handle, const char *name);
  * @return 0 on success, or a negative errno value on failure.
  */
 int bf_handle_new_from_dir(struct bf_handle **handle, const char *name,
-                           bf_rpack_node_t node);
+                           struct bf_chain **chain);
 
 /**
  * @brief Free a `bf_handle` object.
@@ -108,6 +112,16 @@ int bf_handle_pack(const struct bf_handle *handle, bf_wpack_t *pack);
  * @param prefix Prefix to use for the dump. Can't be NULL.
  */
 void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix);
+
+/**
+ * @brief Persist the chain and the runtime context in a BPF map.
+ *
+ * @param handle Handle defining the context to persist. Can't be NULL.
+ * @param chain Chain to persist the context for. Can't be NULL.
+ * @return 0 on success, or a negative error value on failure.
+ */
+int bf_handle_persist_context(struct bf_handle *handle,
+                              const struct bf_chain *chain);
 
 /**
  * @brief Pin the BPF objects to the filesystem.

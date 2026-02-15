@@ -79,7 +79,7 @@ int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
 int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
 {
     _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
-    _cleanup_close_ int dir_fd = -1;
+    _free_bf_chain_ struct bf_chain *chain = NULL;
     bf_rpack_node_t child;
     int r;
 
@@ -101,10 +101,9 @@ int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
     if (r)
         return bf_rpack_key_err(r, "bf_cgen.chain");
 
-    r = bf_rpack_kv_node(node, "handle", &child);
-    if (r)
-        return bf_rpack_key_err(r, "bf_cgen.handle");
-    r = bf_handle_new_from_dir(&_cgen->handle, _cgen->chain->name, child);
+    chain = TAKE_PTR(_cgen->chain);
+
+    r = bf_handle_new_from_dir(&_cgen->handle, chain->name, &_cgen->chain);
     if (r)
         return r;
 
@@ -231,6 +230,10 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
             bf_abort("failed to restore previous namespaces, aborting");
     }
 
+    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    if (r)
+        return bf_err_r(r, "failed to persist ctx");
+
     if (bf_opts_persist()) {
         r = bf_handle_pin(cgen->handle);
         if (r)
@@ -258,6 +261,10 @@ int bf_cgen_load(struct bf_cgen *cgen)
     r = bf_program_load(prog);
     if (r < 0)
         return bf_err_r(r, "failed to load the chain");
+
+    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    if (r)
+        return bf_err_r(r, "failed to persist ctx");
 
     if (bf_opts_persist()) {
         r = bf_handle_pin(cgen->handle);
@@ -301,6 +308,10 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
 
     if (bf_ns_set(bf_ctx_get_ns(), ns))
         bf_abort("failed to restore previous namespaces, aborting");
+
+    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    if (r)
+        return bf_err_r(r, "failed to persist ctx");
 
     if (bf_opts_persist()) {
         r = bf_link_pin(cgen->handle->link, pindir_fd);
@@ -354,6 +365,10 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
         bf_swap(new_prog->handle->link, old_handle->link);
     }
 
+    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    if (r)
+        return bf_err_r(r, "failed to persist ctx");
+
     if (bf_opts_persist()) {
         r = bf_handle_pin(new_prog->handle);
         if (r)
@@ -377,9 +392,9 @@ void bf_cgen_unload(struct bf_cgen *cgen)
 {
     assert(cgen);
 
+    bf_info("bf_cgen_unload");
     // The chain's pin directory will be removed in bf_cgen_free()
     bf_handle_unpin(cgen->handle);
-    bf_handle_unload(cgen->handle);
 }
 
 int bf_cgen_get_counters(const struct bf_cgen *cgen, bf_list *counters)
