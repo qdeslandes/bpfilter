@@ -13,7 +13,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include <bpfilter/front.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/logger.h>
 
@@ -70,9 +69,6 @@ static struct bf_options
     /** Path to the bpffs to pin the BPF objects into. */
     const char *bpffs_path;
 
-    /** Bit flags for enabled fronts. */
-    uint16_t fronts;
-
     /** Verbose flags. Supported flags are:
      * - @c debug Print all the debug logs.
      * - @c bpf Add debug log messages in the generated BPF programs. */
@@ -81,7 +77,6 @@ static struct bf_options
     .transient = false,
     .with_bpf_token = false,
     .bpffs_path = BF_DEFAULT_BPFFS_PATH,
-    .fronts = 0xffff,
     .verbose = 0,
 };
 
@@ -130,16 +125,13 @@ static error_t _bf_opts_parser(int key, char *arg, struct argp_state *state)
             "--buffer-len is deprecated, buffer size is defined automatically");
         break;
     case BF_OPT_NO_IPTABLES_KEY:
-        bf_info("disabling iptables support");
-        args->fronts &= ~BF_FLAG(BF_FRONT_IPT);
+        bf_warn("--no-iptables is deprecated, ignoring");
         break;
     case BF_OPT_NO_NFTABLES_KEY:
-        bf_info("disabling nftables support");
-        args->fronts &= ~BF_FLAG(BF_FRONT_NFT);
+        bf_warn("--no-nftables is deprecated, ignoring");
         break;
     case BF_OPT_NO_CLI_KEY:
-        bf_info("disabling CLI support");
-        args->fronts &= ~BF_FLAG(BF_FRONT_CLI);
+        bf_warn("--no-cli is deprecated, ignoring");
         break;
     case BF_OPT_WITH_BPF_TOKEN:
         args->with_bpf_token = true;
@@ -184,11 +176,6 @@ bool bf_opts_transient(void)
 bool bf_opts_persist(void)
 {
     return !_bf_opts.transient;
-}
-
-bool bf_opts_is_front_enabled(enum bf_front front)
-{
-    return _bf_opts.fronts & BF_FLAG(front);
 }
 
 bool bf_opts_with_bpf_token(void)

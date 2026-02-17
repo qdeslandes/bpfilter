@@ -15,7 +15,6 @@
 
 #include <bpfilter/btf.h>
 #include <bpfilter/dump.h>
-#include <bpfilter/front.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/io.h>
 #include <bpfilter/logger.h>
@@ -27,7 +26,6 @@
 
 #include "ctx.h"
 #include "opts.h"
-#include "xlate/front.h"
 
 /**
  * Global flag to indicate whether the daemon should stop.
@@ -56,136 +54,6 @@ void _bf_sig_handler(int sig)
     (void)sig;
 
     _bf_stop_received = 1;
-}
-
-/**
- * Load bpfilter's runtime context from disk.
- *
- * Read the daemon's runtime context from @p path and initialize the internal
- * context with it.
- *
- * @param path Path to the context file.
- * @return This function will return:
- *         - 1 if the runtime context has been succesfully restored from the disk.
- *         - 0 if no serialized context has been found on the disk.
- *         - < 0 on error.
- */
-static int _bf_load(const char *path)
-{
-    _free_bf_rpack_ bf_rpack_t *pack = NULL;
-    _cleanup_free_ void *data = NULL;
-    bf_rpack_node_t child, array_node;
-    size_t data_len;
-    int r;
-
-    assert(path);
-
-    if (access(ctx_path, F_OK)) {
-        if (errno != ENOENT) {
-            return bf_info_r(errno, "failed test access to context file: %s",
-                             path);
-        }
-
-        bf_info("no serialized context found on disk, "
-                "a new context will be created");
-
-        return 0;
-    }
-
-    r = bf_read_file(path, &data, &data_len);
-    if (r < 0)
-        return r;
-
-    r = bf_rpack_new(&pack, data, data_len);
-    if (r)
-        return r;
-
-    r = bf_rpack_kv_obj(bf_rpack_root(pack), "ctx", &child);
-    if (r)
-        return r;
-
-    r = bf_ctx_load(child);
-    if (r < 0)
-        return r;
-
-    r = bf_rpack_kv_array(bf_rpack_root(pack), "cache", &child);
-    if (r)
-        return r;
-    bf_rpack_array_foreach (child, array_node) {
-        if (bf_rpack_is_nil(array_node))
-            continue;
-
-        r = bf_front_ops_get(i)->unpack(array_node);
-        if (r < 0) {
-            return bf_err_r(r, "failed to restore context for %s",
-                            bf_front_to_str(i));
-        }
-    }
-
-    bf_dbg("loaded serialized context from %s", path);
-
-    return 1;
-}
-
-/**
- * Save bpfilter's runtime context to disk.
- *
- * @param path Path to the context file.
- * @return 0 on success, negative error code on failure.
- */
-static int _bf_save(const char *path)
-{
-    _free_bf_wpack_ bf_wpack_t *pack = NULL;
-    const void *data;
-    size_t data_len;
-    int r;
-
-    assert(path);
-
-    if (bf_ctx_is_empty()) {
-        /* If the context is empty, we don't need to save it and we can remove
-         * the existing save. */
-        unlink(path);
-        return 0;
-    }
-
-    r = bf_wpack_new(&pack);
-    if (r)
-        return r;
-
-    bf_wpack_open_object(pack, "ctx");
-    r = bf_ctx_save(pack);
-    if (r)
-        return r;
-    bf_wpack_close_object(pack);
-
-    /** @todo Front packing should be name-based to avoid relying on the
-     * enumeration order. */
-    bf_wpack_open_array(pack, "cache");
-    for (int i = 0; i < _BF_FRONT_MAX; ++i) {
-        if (bf_opts_is_front_enabled(i)) {
-            bf_wpack_open_object(pack, NULL);
-            r = bf_front_ops_get(i)->pack(pack);
-            if (r < 0)
-                return r;
-            bf_wpack_close_object(pack);
-        } else {
-            bf_wpack_nil(pack);
-        }
-    }
-    bf_wpack_close_array(pack);
-
-    r = bf_wpack_get_data(pack, &data, &data_len);
-    if (r)
-        return r;
-
-    r = bf_write_file(path, data, data_len);
-    if (r < 0)
-        return r;
-
-    bf_dbg("saved serialized context to %s", path);
-
-    return 0;
 }
 
 /**
@@ -225,40 +93,9 @@ static int _bf_init(int argc, char *argv[])
     if (r)
         return bf_err_r(r, "failed to ensure runtime directory exists");
 
-    // Either load context, or initialize it from scratch.
-    if (!bf_opts_transient()) {
-        r = _bf_load(ctx_path);
-        if (r < 0)
-            return bf_err_r(r, "failed to restore bpfilter context");
-    }
-
-    if (bf_opts_transient() || r == 0) {
-        r = bf_ctx_setup();
-        if (r < 0)
-            return bf_err_r(r, "failed to setup context");
-    }
-
-    bf_ctx_dump(EMPTY_PREFIX);
-
-    for (enum bf_front front = 0; front < _BF_FRONT_MAX; ++front) {
-        if (!bf_opts_is_front_enabled(front))
-            continue;
-
-        r = bf_front_ops_get(front)->setup();
-        if (r < 0) {
-            return bf_err_r(r, "failed to setup front-end %s",
-                            bf_front_to_str(front));
-        }
-
-        bf_dbg("completed setup for %s", bf_front_to_str(front));
-    }
-
-    if (!bf_opts_transient()) {
-        r = _bf_save(ctx_path);
-        if (r < 0) {
-            return bf_err_r(r, "failed to backup context at %s", ctx_path);
-        }
-    }
+    r = bf_ctx_setup();
+    if (r < 0)
+        return bf_err_r(r, "failed to setup context");
 
     return 0;
 }
@@ -273,17 +110,6 @@ static int _bf_clean(void)
     _cleanup_close_ int pindir_fd = -1;
     int r;
 
-    for (enum bf_front front = 0; front < _BF_FRONT_MAX; ++front) {
-        if (!bf_opts_is_front_enabled(front))
-            continue;
-
-        r = bf_front_ops_get(front)->teardown();
-        if (r < 0) {
-            bf_warn_r(r, "failed to teardown front-end %s, continuing",
-                      bf_front_to_str(front));
-        }
-    }
-
     bf_ctx_teardown(bf_opts_transient());
 
     r = bf_ctx_rm_pindir();
@@ -292,6 +118,9 @@ static int _bf_clean(void)
 
     return 0;
 }
+
+int bf_cli_request_handler(const struct bf_request *request,
+                           struct bf_response **response);
 
 /**
  * Process a request.
@@ -314,18 +143,10 @@ static int _bf_clean(void)
 static int _bf_process_request(struct bf_request *request,
                                struct bf_response **response)
 {
-    const struct bf_front_ops *ops;
     int r;
 
     assert(request);
     assert(response);
-
-    if (bf_request_front(request) < 0 ||
-        bf_request_front(request) >= _BF_FRONT_MAX) {
-        bf_warn("received a request from front %d, unknown front, ignoring",
-                bf_request_front(request));
-        return bf_response_new_failure(response, -EINVAL);
-    }
 
     if (bf_request_cmd(request) < 0 ||
         bf_request_cmd(request) >= _BF_REQ_CMD_MAX) {
@@ -334,35 +155,16 @@ static int _bf_process_request(struct bf_request *request,
         return bf_response_new_failure(response, -EINVAL);
     }
 
-    if (!bf_opts_is_front_enabled(bf_request_front(request))) {
-        bf_warn("received a request from %s, but front is disabled, ignoring",
-                bf_front_to_str(bf_request_front(request)));
-        return bf_response_new_failure(response, -ENOTSUP);
-    }
+    bf_info("processing request %s",
+            bf_request_cmd_to_str(bf_request_cmd(request)));
 
-    bf_info("processing request %s from %s",
-            bf_request_cmd_to_str(bf_request_cmd(request)),
-            bf_front_to_str(bf_request_front(request)));
-
-    ops = bf_front_ops_get(bf_request_front(request));
-    r = ops->request_handler(request, response);
+    r = bf_cli_request_handler(request, response);
     if (r) {
         /* We failed to process the request, so we need to generate an
          * error. If the error response is successfully generated, then we
          * return 0, otherwise we return the error code. */
         r = bf_response_new_failure(response, r);
     }
-
-    if (!bf_opts_transient() &&
-        (bf_request_cmd(request) == BF_REQ_RULESET_FLUSH ||
-         bf_request_cmd(request) == BF_REQ_RULESET_SET ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_SET ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_LOAD ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_ATTACH ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_UPDATE ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_UPDATE_SET ||
-         bf_request_cmd(request) == BF_REQ_CHAIN_FLUSH))
-        r = _bf_save(ctx_path);
 
     return r;
 }

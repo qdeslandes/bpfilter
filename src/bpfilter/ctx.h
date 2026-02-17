@@ -8,7 +8,6 @@
 #include <stdbool.h>
 
 #include <bpfilter/dump.h>
-#include <bpfilter/front.h>
 #include <bpfilter/list.h>
 #include <bpfilter/pack.h>
 
@@ -60,38 +59,6 @@ void bf_ctx_teardown(bool clear);
  * @param prefix Prefix to use for the dump.
  */
 void bf_ctx_dump(prefix_t *prefix);
-
-/**
- * @brief Serialize the global context.
- *
- * @param pack `bf_wpack_t` object to serialize the context into. Can't be NULL.
- * @return 0 on success, or a negative error value on failure.
- */
-int bf_ctx_save(bf_wpack_t *pack);
-
-/**
- * @brief Deserialize the global context.
- *
- * @param node Node containing the serialized context.
- * @return 0 on success, or a negative errno value on failure.
- */
-int bf_ctx_load(bf_rpack_node_t node);
-
-/**
- * Unload and delete all the codegens, reset the context to a clean state.
- *
- * On failure, the context is left unchanged.
- *
- * @param front Front to flush the codegens for.
- */
-void bf_ctx_flush(enum bf_front front);
-
-/**
- * Check if the context is empty (no codegen defined).
- *
- * @return true is the context is empty, false otherwise.
- */
-bool bf_ctx_is_empty(void);
 
 /**
  * Get the daemon's original namespaces.

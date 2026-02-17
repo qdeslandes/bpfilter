@@ -66,8 +66,8 @@ int bf_ruleset_get(bf_list *chains, bf_list *hookopts, bf_list *counters);
 /**
  * @brief Load a ruleset.
  *
- * The daemon will flush the whole ruleset for BF_FRONT_CLI and install the
- * chains defined in the provided lists instead.
+ * The daemon will flush the whole ruleset and install the chains defined in the
+ * provided lists instead.
  *
  * `hookopts` should contain as many elements as `chains`, so they can be
  * mapped 1 to 1. If a chain shouldn't be attached, they the corresponding

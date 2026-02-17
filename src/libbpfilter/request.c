@@ -33,7 +33,6 @@
  */
 struct bf_request
 {
-    enum bf_front front;
     enum bf_request_cmd cmd;
 
     /** Namespaces the request is coming from. This field will be automatically
@@ -56,8 +55,8 @@ struct bf_request
     char data[];
 };
 
-int bf_request_new(struct bf_request **request, enum bf_front front,
-                   enum bf_request_cmd cmd, const void *data, size_t data_len)
+int bf_request_new(struct bf_request **request, enum bf_request_cmd cmd,
+                   const void *data, size_t data_len)
 {
     _free_bf_request_ struct bf_request *_request = NULL;
 
@@ -73,7 +72,6 @@ int bf_request_new(struct bf_request **request, enum bf_front front,
         _request->data_len = data_len;
     }
 
-    _request->front = front;
     _request->cmd = cmd;
 
     *request = TAKE_PTR(_request);
@@ -101,7 +99,7 @@ int bf_request_new_from_dynbuf(struct bf_request **request,
     return 0;
 }
 
-int bf_request_new_from_pack(struct bf_request **request, enum bf_front front,
+int bf_request_new_from_pack(struct bf_request **request,
                              enum bf_request_cmd cmd, bf_wpack_t *pack)
 {
     const void *data;
@@ -118,7 +116,7 @@ int bf_request_new_from_pack(struct bf_request **request, enum bf_front front,
     if (r)
         return r;
 
-    return bf_request_new(request, front, cmd, data, data_len);
+    return bf_request_new(request, cmd, data, data_len);
 }
 
 int bf_request_copy(struct bf_request **dest, const struct bf_request *src)
@@ -141,12 +139,6 @@ void bf_request_free(struct bf_request **request)
 {
     free(*request);
     *request = NULL;
-}
-
-enum bf_front bf_request_front(const struct bf_request *request)
-{
-    assert(request);
-    return request->front;
 }
 
 enum bf_request_cmd bf_request_cmd(const struct bf_request *request)

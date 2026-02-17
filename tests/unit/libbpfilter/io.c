@@ -55,7 +55,7 @@ static void send_and_recv_small(void **state)
         _free_bf_request_ struct bf_request *request = NULL;
         _free_bf_response_ struct bf_response *response = NULL;
 
-        assert_ok(bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET,
+        assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET,
                                  input, strlen(input) + 1));
         assert_ok(bf_send(sockets->client_fd, request, &response, NULL));
 
@@ -95,7 +95,7 @@ static void send_and_recv_big(void **state)
         _free_bf_request_ struct bf_request *request = NULL;
         _free_bf_response_ struct bf_response *response = NULL;
 
-        assert_ok(bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET,
+        assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET,
                                  input, strlen(input) + 1));
         assert_ok(bf_send(sockets->client_fd, request, &response, NULL));
 
@@ -138,7 +138,7 @@ static void send_and_recv_fd(void **state)
         _free_bf_request_ struct bf_request *request = NULL;
         _free_bf_response_ struct bf_response *response = NULL;
 
-        assert_ok(bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET,
+        assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET,
                                  input, strlen(input) + 1));
         assert_ok(bf_send(sockets->client_fd, request, &response, &recv_fd));
 

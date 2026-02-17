@@ -7,7 +7,6 @@
 
 #include <stddef.h>
 
-#include <bpfilter/front.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/pack.h>
 
@@ -66,12 +65,12 @@ struct bf_request;
  * @param data_len Length of the client-specific data.
  * @return 0 on success or negative errno code on failure.
  */
-int bf_request_new(struct bf_request **request, enum bf_front front,
-                   enum bf_request_cmd cmd, const void *data, size_t data_len);
+int bf_request_new(struct bf_request **request, enum bf_request_cmd cmd,
+                   const void *data, size_t data_len);
 
 int bf_request_new_from_dynbuf(struct bf_request **request,
                                struct bf_dynbuf *dynbuf);
-int bf_request_new_from_pack(struct bf_request **request, enum bf_front front,
+int bf_request_new_from_pack(struct bf_request **request,
                              enum bf_request_cmd cmd, bf_wpack_t *pack);
 
 /**
@@ -94,7 +93,6 @@ void bf_request_free(struct bf_request **request);
  */
 int bf_request_copy(struct bf_request **dest, const struct bf_request *src);
 
-enum bf_front bf_request_front(const struct bf_request *request);
 struct bf_ns *bf_request_ns(const struct bf_request *request);
 enum bf_request_cmd bf_request_cmd(const struct bf_request *request);
 int bf_request_fd(const struct bf_request *request);

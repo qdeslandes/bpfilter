@@ -8,7 +8,6 @@
 
 #include <bpfilter/chain.h>
 #include <bpfilter/counter.h>
-#include <bpfilter/front.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/hook.h>
 #include <bpfilter/io.h>
@@ -25,32 +24,6 @@
 #include "cgen/prog/map.h"
 #include "cgen/program.h"
 #include "ctx.h"
-#include "xlate/front.h"
-
-static int _bf_cli_setup(void);
-static int _bf_cli_teardown(void);
-static int _bf_cli_request_handler(const struct bf_request *request,
-                                   struct bf_response **response);
-static int _bf_cli_pack(bf_wpack_t *pack);
-static int _bf_cli_unpack(bf_rpack_node_t node);
-
-const struct bf_front_ops cli_front = {
-    .setup = _bf_cli_setup,
-    .teardown = _bf_cli_teardown,
-    .request_handler = _bf_cli_request_handler,
-    .pack = _bf_cli_pack,
-    .unpack = _bf_cli_unpack,
-};
-
-static int _bf_cli_setup(void)
-{
-    return 0;
-}
-
-static int _bf_cli_teardown(void)
-{
-    return 0;
-}
 
 static int _bf_get_all_cgen(bf_list *cgens)
 {
@@ -232,7 +205,7 @@ int _bf_cli_ruleset_set(const struct bf_request *request,
             bf_cgen_free(&cgen);
         }
 
-        r = bf_cgen_new(&cgen, BF_FRONT_CLI, &chain);
+        r = bf_cgen_new(&cgen, &chain);
         if (r)
             goto err_load;
 
@@ -294,7 +267,7 @@ int _bf_cli_chain_set(const struct bf_request *request,
         bf_cgen_free(&cgen);
     }
 
-    r = bf_cgen_new(&cgen, BF_FRONT_CLI, &chain);
+    r = bf_cgen_new(&cgen, &chain);
     if (r)
         return r;
 
@@ -456,7 +429,7 @@ int _bf_cli_chain_load(const struct bf_request *request,
                         chain->name);
     }
 
-    r = bf_cgen_new(&cgen, BF_FRONT_CLI, &chain);
+    r = bf_cgen_new(&cgen, &chain);
     if (r)
         return r;
 
@@ -651,8 +624,8 @@ int _bf_cli_chain_update_set(const struct bf_request *request,
     return 0;
 }
 
-static int _bf_cli_request_handler(const struct bf_request *request,
-                                   struct bf_response **response)
+int bf_cli_request_handler(const struct bf_request *request,
+                           struct bf_response **response)
 {
     int r;
 
@@ -714,18 +687,4 @@ static int _bf_cli_request_handler(const struct bf_request *request,
     }
 
     return r;
-}
-
-static int _bf_cli_pack(bf_wpack_t *pack)
-{
-    (void)pack;
-
-    return 0;
-}
-
-static int _bf_cli_unpack(bf_rpack_node_t node)
-{
-    (void)node;
-
-    return 0;
 }

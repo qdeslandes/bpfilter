@@ -23,10 +23,8 @@ static void new_request(void **state)
     (void)state;
 
     // Create request with no data
-    assert_ok(
-        bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET, NULL, 0));
+    assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET, NULL, 0));
     assert_non_null(request);
-    assert_int_equal(bf_request_front(request), BF_FRONT_CLI);
     assert_int_equal(bf_request_cmd(request), BF_REQ_CHAIN_GET);
     assert_int_equal(bf_request_data_len(request), 0);
 
@@ -34,10 +32,9 @@ static void new_request(void **state)
     assert_null(request);
 
     // Create request with data
-    assert_ok(bf_request_new(&request, BF_FRONT_IPT, BF_REQ_RULESET_SET, data,
+    assert_ok(bf_request_new(&request, BF_REQ_RULESET_SET, data,
                              data_len));
     assert_non_null(request);
-    assert_int_equal(bf_request_front(request), BF_FRONT_IPT);
     assert_int_equal(bf_request_cmd(request), BF_REQ_RULESET_SET);
     assert_int_equal(bf_request_data_len(request), data_len);
     assert_string_equal(bf_request_data(request), data);
@@ -55,7 +52,7 @@ static void new_from_dynbuf(void **state)
 
     // Create a source request to copy into dynbuf
     assert_ok(
-        bf_request_new(&src, BF_FRONT_CLI, BF_REQ_CHAIN_SET, data, data_len));
+        bf_request_new(&src, BF_REQ_CHAIN_SET, data, data_len));
 
     // Write request to dynbuf
     assert_ok(bf_dynbuf_write(&dynbuf, src, bf_request_size(src)));
@@ -63,7 +60,6 @@ static void new_from_dynbuf(void **state)
     // Create request from dynbuf
     assert_ok(bf_request_new_from_dynbuf(&request, &dynbuf));
     assert_non_null(request);
-    assert_int_equal(bf_request_front(request), BF_FRONT_CLI);
     assert_int_equal(bf_request_cmd(request), BF_REQ_CHAIN_SET);
     assert_int_equal(bf_request_data_len(request), data_len);
     assert_string_equal(bf_request_data(request), data);
@@ -98,10 +94,9 @@ static void new_from_pack(void **state)
     bf_wpack_kv_str(pack, "message", data);
 
     assert_true(bf_wpack_is_valid(pack));
-    assert_ok(
-        bf_request_new_from_pack(&request, BF_FRONT_CLI, BF_REQ_CUSTOM, pack));
+    assert_ok(bf_request_new_from_pack(&request, BF_REQ_CUSTOM,
+                                       pack));
     assert_non_null(request);
-    assert_int_equal(bf_request_front(request), BF_FRONT_CLI);
     assert_int_equal(bf_request_cmd(request), BF_REQ_CUSTOM);
     assert_int_gt(bf_request_data_len(request), 0);
 }
@@ -116,12 +111,11 @@ static void copy(void **state)
     (void)state;
 
     // Copy request with data
-    assert_ok(
-        bf_request_new(&src, BF_FRONT_NFT, BF_REQ_CHAIN_LOAD, data, data_len));
+    assert_ok(bf_request_new(&src, BF_REQ_CHAIN_LOAD, data,
+                             data_len));
     assert_ok(bf_request_copy(&dest, src));
 
     assert_non_null(dest);
-    assert_int_equal(bf_request_front(dest), bf_request_front(src));
     assert_int_equal(bf_request_cmd(dest), bf_request_cmd(src));
     assert_int_equal(bf_request_data_len(dest), bf_request_data_len(src));
     assert_int_equal(bf_request_size(dest), bf_request_size(src));
@@ -141,11 +135,8 @@ static void accessors(void **state)
 
     (void)state;
 
-    assert_ok(bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET, data,
+    assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET, data,
                              data_len));
-
-    // Test bf_request_front
-    assert_int_equal(bf_request_front(request), BF_FRONT_CLI);
 
     // Test bf_request_cmd
     assert_int_equal(bf_request_cmd(request), BF_REQ_CHAIN_GET);
@@ -175,8 +166,7 @@ static void setters(void **state)
 
     (void)state;
 
-    assert_ok(
-        bf_request_new(&request, BF_FRONT_CLI, BF_REQ_CHAIN_GET, NULL, 0));
+    assert_ok(bf_request_new(&request, BF_REQ_CHAIN_GET, NULL, 0));
 
     // Test bf_request_set_ns
     bf_request_set_ns(request, fake_ns);
@@ -200,9 +190,9 @@ static void size_calculation(void **state)
 
     (void)state;
 
-    assert_ok(bf_request_new(&request1, BF_FRONT_CLI, BF_REQ_CHAIN_GET,
+    assert_ok(bf_request_new(&request1, BF_REQ_CHAIN_GET,
                              small_data, strlen(small_data) + 1));
-    assert_ok(bf_request_new(&request2, BF_FRONT_CLI, BF_REQ_CHAIN_GET,
+    assert_ok(bf_request_new(&request2, BF_REQ_CHAIN_GET,
                              large_data, strlen(large_data) + 1));
 
     // Larger data should result in larger size

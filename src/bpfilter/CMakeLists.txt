@@ -41,14 +41,6 @@ add_executable(bpfilter
     ${CMAKE_CURRENT_SOURCE_DIR}/cgen/xdp.h               ${CMAKE_CURRENT_SOURCE_DIR}/cgen/xdp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ctx.h                    ${CMAKE_CURRENT_SOURCE_DIR}/ctx.c
     ${CMAKE_CURRENT_SOURCE_DIR}/xlate/cli.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/xlate/front.h            ${CMAKE_CURRENT_SOURCE_DIR}/xlate/front.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/xlate/ipt/dump.h         ${CMAKE_CURRENT_SOURCE_DIR}/xlate/ipt/dump.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/xlate/ipt/helpers.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/xlate/ipt/ipt.c
-    # Do not build those until the nft front-end is fixed.
-    # ${CMAKE_CURRENT_SOURCE_DIR}/xlate/nft/nfgroup.h      ${CMAKE_CURRENT_SOURCE_DIR}/xlate/nft/nfgroup.c
-    # ${CMAKE_CURRENT_SOURCE_DIR}/xlate/nft/nfmsg.h        ${CMAKE_CURRENT_SOURCE_DIR}/xlate/nft/nfmsg.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/xlate/nft/nft.c
 
     ${CMAKE_SOURCE_DIR}/src/external/include/disasm.h   ${CMAKE_SOURCE_DIR}/src/external/disasm.c
 )

@@ -15,7 +15,6 @@
 #include <bpfilter/btf.h>
 #include <bpfilter/chain.h>
 #include <bpfilter/dump.h>
-#include <bpfilter/front.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/hook.h>
 #include <bpfilter/io.h>
@@ -319,26 +318,6 @@ int bf_ctx_load(bf_rpack_node_t node)
     _bf_global_ctx = TAKE_PTR(ctx);
 
     return 0;
-}
-
-static void _bf_ctx_flush(struct bf_ctx *ctx, enum bf_front front)
-{
-    assert(ctx);
-
-    bf_list_foreach (&ctx->cgens, cgen_node) {
-        struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
-
-        if (cgen->front != front)
-            continue;
-
-        bf_cgen_unload(cgen);
-        bf_list_delete(&ctx->cgens, cgen_node);
-    }
-}
-
-void bf_ctx_flush(enum bf_front front)
-{
-    _bf_ctx_flush(_bf_global_ctx, front);
 }
 
 bool bf_ctx_is_empty(void)
