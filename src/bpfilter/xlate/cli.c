@@ -4,6 +4,7 @@
  */
 
 #include <errno.h>
+#include <unistd.h>
 
 #include <bpfilter/chain.h>
 #include <bpfilter/counter.h>
@@ -51,13 +52,71 @@ static int _bf_cli_teardown(void)
     return 0;
 }
 
+static int _bf_get_all_cgen(bf_list *cgens)
+{
+    _clean_bf_list_ bf_list _cgens = bf_list_default_from(*cgens);
+    int r;
+
+    assert(cgens);
+
+    bf_dir_foreach(bf_ctx_get_pindir_fd(), iter)
+    {
+        _free_bf_cgen_ struct bf_cgen *cgen = NULL;
+
+        r = bf_cgen_new_from_name(&cgen, iter.child_name);
+        if (r)
+            return bf_err_r(r, "failed to restore cgen %s", iter.child_name);
+
+        r = bf_list_push(&_cgens, (void **)&cgen);
+        if (r) {
+            return bf_err_r(r, "failed to add discovered cgen %s to list",
+                            iter.child_name);
+        }
+    }
+
+    bf_swap(*cgens, _cgens);
+
+    return 0;
+}
+
+static struct bf_cgen *_bf_get_cgen(const char *name)
+{
+    struct bf_cgen *cgen;
+    int r;
+
+    assert(name);
+
+    bf_info("_bf_get_cgen for %s", name);
+    r = bf_cgen_new_from_name(&cgen, name);
+    if (r) {
+        bf_info("failed _bf_get_cgen for %s", name);
+        bf_err_r(r, "failed to restore cgen %s", name);
+        return NULL;
+    }
+
+    bf_info("success _bf_get_cgen %s", name);
+    return cgen;
+}
+
 int _bf_cli_ruleset_flush(const struct bf_request *request,
                           struct bf_response **response)
 {
+    _clean_bf_list_ bf_list cgens = bf_list_default(bf_cgen_free, NULL);
+    int r;
+
     (void)request;
     (void)response;
 
-    bf_ctx_flush(BF_FRONT_CLI);
+    r = _bf_get_all_cgen(&cgens);
+    if (r)
+        return r;
+
+    bf_list_foreach (&cgens, node) {
+        struct bf_cgen *cgen = bf_list_node_get_data(node);
+
+        bf_cgen_unload(cgen);
+        bf_info("flushed chain %s", cgen->chain->name);
+    }
 
     return 0;
 }
@@ -65,7 +124,7 @@ int _bf_cli_ruleset_flush(const struct bf_request *request,
 static int _bf_cli_ruleset_get(const struct bf_request *request,
                                struct bf_response **response)
 {
-    _clean_bf_list_ bf_list cgens = bf_list_default(NULL, NULL);
+    _clean_bf_list_ bf_list cgens = bf_list_default(bf_cgen_free, NULL);
     _clean_bf_list_ bf_list chains = bf_list_default(NULL, bf_chain_pack);
     _clean_bf_list_ bf_list hookopts = bf_list_default(NULL, bf_hookopts_pack);
     _clean_bf_list_ bf_list counters =
@@ -79,9 +138,9 @@ static int _bf_cli_ruleset_get(const struct bf_request *request,
     if (r)
         return r;
 
-    r = bf_ctx_get_cgens_for_front(&cgens, BF_FRONT_CLI);
-    if (r < 0)
-        return bf_err_r(r, "failed to get cgen list");
+    r = _bf_get_all_cgen(&cgens);
+    if (r)
+        return bf_err_r(r, "failed to gather cgens");
 
     bf_list_foreach (&cgens, cgen_node) {
         struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
@@ -134,7 +193,7 @@ int _bf_cli_ruleset_set(const struct bf_request *request,
 
     (void)response;
 
-    bf_ctx_flush(BF_FRONT_CLI);
+    _bf_cli_ruleset_flush(NULL, NULL);
 
     r = bf_rpack_new(&pack, bf_request_data(request),
                      bf_request_data_len(request));
@@ -167,6 +226,12 @@ int _bf_cli_ruleset_set(const struct bf_request *request,
                 goto err_load;
         }
 
+        cgen = _bf_get_cgen(chain->name);
+        if (cgen) {
+            bf_cgen_unload(cgen);
+            bf_cgen_free(&cgen);
+        }
+
         r = bf_cgen_new(&cgen, BF_FRONT_CLI, &chain);
         if (r)
             goto err_load;
@@ -177,31 +242,19 @@ int _bf_cli_ruleset_set(const struct bf_request *request,
             bf_err_r(r, "failed to set chain '%s'", cgen->chain->name);
             goto err_load;
         }
-
-        r = bf_ctx_set_cgen(cgen);
-        if (r) {
-            /* The codegen is loaded already, if the daemon runs in persistent
-             * mode, cleaning the codegen won't be sufficient to discard the
-             * chain, it must be unpinned. */
-            bf_cgen_unload(cgen);
-            goto err_load;
-        }
-
-        TAKE_PTR(cgen);
     }
 
     return 0;
 
 err_load:
-    bf_ctx_flush(BF_FRONT_CLI);
+    _bf_cli_ruleset_flush(NULL, NULL);
     return r;
 }
 
 int _bf_cli_chain_set(const struct bf_request *request,
                       struct bf_response **response)
 {
-    struct bf_cgen *old_cgen;
-    _free_bf_cgen_ struct bf_cgen *new_cgen = NULL;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     _free_bf_chain_ struct bf_chain *chain = NULL;
     _free_bf_hookopts_ struct bf_hookopts *hookopts = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
@@ -235,31 +288,21 @@ int _bf_cli_chain_set(const struct bf_request *request,
             return r;
     }
 
-    r = bf_cgen_new(&new_cgen, BF_FRONT_CLI, &chain);
+    cgen = _bf_get_cgen(chain->name);
+    if (cgen) {
+        bf_cgen_unload(cgen);
+        bf_cgen_free(&cgen);
+    }
+
+    r = bf_cgen_new(&cgen, BF_FRONT_CLI, &chain);
     if (r)
         return r;
 
-    old_cgen = bf_ctx_get_cgen(new_cgen->chain->name);
-    if (old_cgen) {
-        /* bf_ctx_delete_cgen() can only fail if the codegen is not found,
-         * but we know this codegen exist. */
-        (void)bf_ctx_delete_cgen(old_cgen, true);
-    }
-
-    r = bf_cgen_set(new_cgen, bf_request_ns(request),
-                    hookopts ? &hookopts : NULL);
+    r = bf_cgen_set(cgen, bf_request_ns(request), hookopts ? &hookopts : NULL);
     if (r)
         return r;
 
-    r = bf_ctx_set_cgen(new_cgen);
-    if (r) {
-        bf_cgen_unload(new_cgen);
-        return r;
-    }
-
-    TAKE_PTR(new_cgen);
-
-    return r;
+    return 0;
 }
 
 static int _bf_cli_chain_get(const struct bf_request *request,
@@ -267,7 +310,7 @@ static int _bf_cli_chain_get(const struct bf_request *request,
 {
     _clean_bf_list_ bf_list counters =
         bf_list_default(bf_counter_free, bf_counter_pack);
-    struct bf_cgen *cgen;
+    _free_bf_cgen_ struct bf_cgen *cgen;
     _cleanup_free_ char *name = NULL;
     _free_bf_wpack_ bf_wpack_t *wpack = NULL;
     _free_bf_rpack_ bf_rpack_t *rpack = NULL;
@@ -282,7 +325,7 @@ static int _bf_cli_chain_get(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(name);
+    cgen = _bf_get_cgen(name);
     if (!cgen)
         return bf_err_r(-ENOENT, "chain '%s' not found", name);
 
@@ -318,7 +361,7 @@ static int _bf_cli_chain_get(const struct bf_request *request,
 int _bf_cli_chain_prog_fd(const struct bf_request *request,
                           struct bf_response **response)
 {
-    struct bf_cgen *cgen;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     _cleanup_free_ char *name = NULL;
     int r;
@@ -334,7 +377,7 @@ int _bf_cli_chain_prog_fd(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(name);
+    cgen = _bf_get_cgen(name);
     if (!cgen)
         return bf_err_r(-ENOENT, "failed to find chain '%s'", name);
 
@@ -351,7 +394,7 @@ int _bf_cli_chain_prog_fd(const struct bf_request *request,
 int _bf_cli_chain_logs_fd(const struct bf_request *request,
                           struct bf_response **response)
 {
-    struct bf_cgen *cgen;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     _cleanup_free_ char *name = NULL;
     int r;
@@ -367,7 +410,7 @@ int _bf_cli_chain_logs_fd(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(name);
+    cgen = _bf_get_cgen(name);
     if (!cgen)
         return bf_err_r(-ENOENT, "failed to find chain '%s'", name);
 
@@ -406,7 +449,8 @@ int _bf_cli_chain_load(const struct bf_request *request,
     if (r)
         return r;
 
-    if (bf_ctx_get_cgen(chain->name)) {
+    cgen = _bf_get_cgen(chain->name);
+    if (cgen) {
         return bf_err_r(-EEXIST,
                         "_bf_cli_chain_load: chain '%s' already exists",
                         chain->name);
@@ -420,15 +464,6 @@ int _bf_cli_chain_load(const struct bf_request *request,
     if (r)
         return r;
 
-    r = bf_ctx_set_cgen(cgen);
-    if (r) {
-        bf_cgen_unload(cgen);
-        return bf_err_r(
-            r, "bf_ctx_set_cgen: failed to add cgen to the runtime context");
-    }
-
-    TAKE_PTR(cgen);
-
     return r;
 }
 
@@ -439,7 +474,7 @@ int _bf_cli_chain_attach(const struct bf_request *request,
     _free_bf_hookopts_ struct bf_hookopts *hookopts = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     _cleanup_free_ char *name = NULL;
-    struct bf_cgen *cgen = NULL;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     bf_rpack_node_t child;
     int r;
 
@@ -463,7 +498,7 @@ int _bf_cli_chain_attach(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(name);
+    cgen = _bf_get_cgen(name);
     if (!cgen)
         return bf_err_r(-ENOENT, "chain '%s' does not exist", name);
     if (cgen->handle->link)
@@ -484,7 +519,7 @@ int _bf_cli_chain_update(const struct bf_request *request,
                          struct bf_response **response)
 {
     _free_bf_chain_ struct bf_chain *chain = NULL;
-    struct bf_cgen *cgen = NULL;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     bf_rpack_node_t child;
     int r;
@@ -505,7 +540,7 @@ int _bf_cli_chain_update(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(chain->name);
+    cgen = _bf_get_cgen(chain->name);
     if (!cgen)
         return -ENOENT;
 
@@ -519,7 +554,7 @@ int _bf_cli_chain_update(const struct bf_request *request,
 int _bf_cli_chain_flush(const struct bf_request *request,
                         struct bf_response **response)
 {
-    struct bf_cgen *cgen = NULL;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     _cleanup_free_ char *name = NULL;
     int r;
@@ -537,11 +572,13 @@ int _bf_cli_chain_flush(const struct bf_request *request,
     if (r)
         return r;
 
-    cgen = bf_ctx_get_cgen(name);
+    cgen = _bf_get_cgen(name);
     if (!cgen)
         return -ENOENT;
 
-    return bf_ctx_delete_cgen(cgen, true);
+    bf_cgen_unload(cgen);
+
+    return 0;
 }
 
 int _bf_cli_chain_update_set(const struct bf_request *request,
@@ -553,7 +590,7 @@ int _bf_cli_chain_update_set(const struct bf_request *request,
     _free_bf_rpack_ bf_rpack_t *pack = NULL;
     struct bf_set *dest_set = NULL;
     _cleanup_free_ char *chain_name = NULL;
-    struct bf_cgen *cgen = NULL;
+    _free_bf_cgen_ struct bf_cgen *cgen = NULL;
     bf_rpack_node_t child;
     int r;
 
@@ -587,7 +624,7 @@ int _bf_cli_chain_update_set(const struct bf_request *request,
     if (!bf_streq(to_add->name, to_remove->name))
         return bf_err_r(-EINVAL, "to_add->name must match to_remove->name");
 
-    cgen = bf_ctx_get_cgen(chain_name);
+    cgen = _bf_get_cgen(chain_name);
     if (!cgen)
         return bf_err_r(-ENOENT, "chain '%s' does not exist", chain_name);
 

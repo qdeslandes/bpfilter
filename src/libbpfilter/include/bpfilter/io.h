@@ -131,3 +131,35 @@ int bf_rmdir_at(int parent_fd, const char *dir_name, bool recursive);
  *         descriptor.
  */
 int bf_acquire_lock(const char *path);
+
+/**
+ * @struct bf_dir_iter
+ *
+ * Directory iterator.
+ */
+struct bf_dir_iter
+{
+    void *dir;
+    const char *child_name;
+};
+
+struct bf_dir_iter bf_dir_iter_init(int dir_fd);
+bool bf_dir_iter_next(struct bf_dir_iter *iter);
+void bf_dir_iter_clean(struct bf_dir_iter *iter);
+
+#define _clean_bf_dir_iter_ __attribute__((__cleanup__(bf_dir_iter_clean)))
+
+/**
+ * @brief Iterate over child directories of a parent directory.
+ *
+ * For each child directory in `dir_fd`, its name is available as
+ * `itern_name.child_name` within the loop body.
+ *
+ * @param dir_fd File descriptor of the parent directory to iterate over.
+ * @param iter_name Name of the iterator within the loop body.
+ *        `iter_name.child_name` is the current child directory name.
+ */
+#define bf_dir_foreach(dir_fd, iter_name)                                      \
+    for (_clean_bf_dir_iter_ struct bf_dir_iter iter_name =                    \
+             bf_dir_iter_init(dir_fd);                                         \
+         bf_dir_iter_next(&(iter_name));)

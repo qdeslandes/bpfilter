@@ -66,6 +66,8 @@ int bf_cgen_new(struct bf_cgen **cgen, enum bf_front front,
  */
 int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node);
 
+int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name);
+
 /**
  * Free a codegen.
  *

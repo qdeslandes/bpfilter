@@ -237,7 +237,7 @@ int bf_link_new_from_fd(struct bf_link **link, struct bf_hookopts **hookopts,
             struct cgid_file_handle handle = {.handle_bytes = 128};
             int mount_id;
 
-            if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_PRIORITIES)))
+            if (!((*hookopts)->used_opts & BF_FLAG(BF_HOOKOPTS_CGPATH)))
                 return bf_err_r(-EINVAL, "missing cgpath in hookopts");
 
             if (name_to_handle_at(AT_FDCWD, (*hookopts)->cgpath,

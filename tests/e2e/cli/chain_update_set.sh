@@ -25,6 +25,7 @@ chain_output=$(${FROM_NS} bfcli chain get --name test_xdp)
 echo "$chain_output"
 echo "$chain_output" | grep -q '10.0.0.1'
 echo "$chain_output" | grep -q '10.0.0.2'
+${FROM_NS} bfcli ruleset get
 echo "$chain_output" | grep -q '10.0.0.3'
 echo "$chain_output" | grep -q '10.0.0.4'
 

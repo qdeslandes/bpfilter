@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <bpfilter/bpf.h>
 #include <bpfilter/chain.h>
@@ -245,6 +246,7 @@ void bf_handle_free(struct bf_handle **handle)
     if (!*handle)
         return;
 
+    unlinkat(bf_ctx_get_pindir_fd(), (*handle)->name, AT_REMOVEDIR);
     freep((void *)&(*handle)->name);
     closep(&(*handle)->prog_fd);
 
@@ -367,14 +369,14 @@ int bf_handle_pin(struct bf_handle *handle)
     }
 
     r = bf_bpf_obj_pin(_BF_PROG_NAME, handle->prog_fd, dir_fd);
-    if (r) {
+    if (r && r != -EEXIST) {
         bf_err_r(r, "failed to pin BPF program");
         goto err_unpin_all;
     }
 
     if (handle->link) {
         r = bf_link_pin(handle->link, dir_fd);
-        if (r) {
+        if (r && r != -EEXIST) {
             bf_err_r(r, "failed to pin BPF link");
             goto err_unpin_all;
         }
@@ -382,7 +384,7 @@ int bf_handle_pin(struct bf_handle *handle)
 
     if (handle->xmap) {
         r = bf_map_pin(handle->xmap, dir_fd);
-        if (r) {
+        if (r && r != -EEXIST) {
             bf_err_r(r, "failed to pin ctx map");
             goto err_unpin_all;
         }
@@ -415,6 +417,7 @@ void bf_handle_unpin(struct bf_handle *handle)
         bf_map_unpin(handle->xmap, dir_fd);
 
     unlinkat(dir_fd, _BF_PROG_NAME, 0);
+    unlinkat(bf_ctx_get_pindir_fd(), handle->name, AT_REMOVEDIR);
 }
 
 int bf_handle_get_counter(const struct bf_handle *handle, uint32_t counter_idx,
@@ -472,6 +475,7 @@ int bf_handle_persist_context(struct bf_handle *handle,
 {
     _free_bf_map_ struct bf_map *map = NULL;
     _free_bf_wpack_ bf_wpack_t *wpack = NULL;
+    _cleanup_close_ int pin_fd = -1;
     const void *data;
     size_t data_len;
     uint32_t key = 0;
@@ -499,6 +503,12 @@ int bf_handle_persist_context(struct bf_handle *handle,
     r = bf_wpack_get_data(wpack, &data, &data_len);
     if (r)
         return bf_err_r(r, "failed to get serialized chain data");
+
+    if (handle->xmap) {
+        pin_fd = _bf_handle_get_fd(handle->name);
+        bf_map_unpin(handle->xmap, pin_fd);
+        bf_map_free(&handle->xmap);
+    }
 
     r = bf_map_new(&handle->xmap, "ctx_map", BF_MAP_TYPE_CTX, sizeof(uint32_t),
                    data_len, 1);

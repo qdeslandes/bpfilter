@@ -112,6 +112,27 @@ int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
     return 0;
 }
 
+int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name)
+{
+    _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
+    int r;
+
+    assert(cgen);
+    assert(name);
+
+    _cgen = calloc(1, sizeof(*_cgen));
+    if (!_cgen)
+        return -ENOMEM;
+
+    r = bf_handle_new_from_dir(&_cgen->handle, name, &_cgen->chain);
+    if (r)
+        return r;
+
+    *cgen = TAKE_PTR(_cgen);
+
+    return 0;
+}
+
 void bf_cgen_free(struct bf_cgen **cgen)
 {
     _cleanup_close_ int pin_fd = -1;
@@ -120,13 +141,6 @@ void bf_cgen_free(struct bf_cgen **cgen)
 
     if (!*cgen)
         return;
-
-    /* Perform a non-recursive removal of the chain's pin directory: if
-     * the chain hasn't been pinned (e.g. due to a failure), the pin directory
-     * will be empty and will be removed. If the chain is valid and pinned, then
-     * the removal of the pin directory will fail, but that's alright. */
-    if (bf_opts_persist() && (pin_fd = bf_ctx_get_pindir_fd()) >= 0)
-        bf_rmdir_at(pin_fd, (*cgen)->chain->name, false);
 
     bf_handle_free(&(*cgen)->handle);
     bf_chain_free(&(*cgen)->chain);
@@ -313,13 +327,9 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
     if (r)
         return bf_err_r(r, "failed to persist ctx");
 
-    if (bf_opts_persist()) {
-        r = bf_link_pin(cgen->handle->link, pindir_fd);
-        if (r) {
-            bf_handle_detach(cgen->handle);
-            return r;
-        }
-    }
+    r = bf_handle_pin(cgen->handle);
+    if (r)
+        return bf_err_r(r, "failed to pin handle");
 
     return r;
 }
@@ -327,15 +337,17 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
 int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
 {
     _free_bf_program_ struct bf_program *new_prog = NULL;
-    struct bf_handle *old_handle;
+    _free_bf_handle_ struct bf_handle *new_handle = NULL;
     int r;
 
     assert(cgen);
     assert(new_chain);
 
-    old_handle = cgen->handle;
+    r = bf_handle_new(&new_handle, (*new_chain)->name);
+    if (r)
+        return r;
 
-    r = bf_program_new(&new_prog, *new_chain, cgen->handle);
+    r = bf_program_new(&new_prog, *new_chain, new_handle);
     if (r < 0)
         return bf_err_r(r, "failed to create a new bf_program");
 
@@ -349,34 +361,33 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
     if (r)
         return bf_err_r(r, "failed to load new program");
 
-    if (bf_opts_persist())
-        bf_handle_unpin(old_handle);
+    bf_handle_unpin(cgen->handle);
 
-    if (old_handle->link) {
-        r = bf_link_update(old_handle->link, new_prog->handle->prog_fd);
+    if (cgen->handle->link) {
+        r = bf_link_update(cgen->handle->link, new_handle->prog_fd);
         if (r) {
             bf_err_r(r, "failed to update bf_link object with new program");
-            if (bf_opts_persist() && bf_handle_pin(old_handle) < 0)
+            if (bf_opts_persist() && bf_handle_pin(cgen->handle) < 0)
                 bf_err("failed to repin old handle, ignoring");
             return r;
         }
 
         // We updated the old link, we need to store it in the new handle
-        bf_swap(new_prog->handle->link, old_handle->link);
-    }
-
-    r = bf_handle_persist_context(cgen->handle, cgen->chain);
-    if (r)
-        return bf_err_r(r, "failed to persist ctx");
-
-    if (bf_opts_persist()) {
-        r = bf_handle_pin(new_prog->handle);
-        if (r)
-            bf_warn_r(r, "failed to pin new handle, ignoring");
+        bf_swap(new_handle->link, cgen->handle->link);
     }
 
     bf_chain_free(&cgen->chain);
     cgen->chain = TAKE_PTR(*new_chain);
+
+    r = bf_handle_persist_context(new_handle, cgen->chain);
+    if (r)
+        return bf_err_r(r, "failed to persist ctx");
+
+    r = bf_handle_pin(new_handle);
+    if (r)
+        bf_warn_r(r, "failed to pin new handle, ignoring");
+
+    bf_swap(cgen->handle, new_handle);
 
     return 0;
 }

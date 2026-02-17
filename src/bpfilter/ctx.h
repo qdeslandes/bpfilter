@@ -94,47 +94,6 @@ void bf_ctx_flush(enum bf_front front);
 bool bf_ctx_is_empty(void);
 
 /**
- * Get a codegen from the global context.
- *
- * @param name Name of the codegen to get. Can't be NULL.
- * @return The requested codegen, or NULL if not found.
- */
-struct bf_cgen *bf_ctx_get_cgen(const char *name);
-
-/**
- * Get the list of @ref bf_cgen defined for a given @p front .
- *
- * The @p cgens list returned to the caller does not own the codegens, it can
- * safely be cleaned up using @ref bf_list_clean or @ref bf_list_free .
- *
- * @param cgens List of @ref bf_cgen to fill. The list will be initialised by
- *        this function. Can't be NULL. On failure, @p cgens is left unchanged.
- * @param front Front the get the list of @ref bf_cgen for.
- * @return 0 on success, or negative errno value on failure.
- */
-int bf_ctx_get_cgens_for_front(bf_list *cgens, enum bf_front front);
-
-/**
- * Add a codegen to the global context.
- *
- * @param cgen Codegen to add to the context. Can't be NULL.
- * @return 0 on success, or a negative errno value on failure. If a chain
- *         already exist in the context with the same name, the codegen is not
- *         added to the context and `-EEXIST` is returned.
- */
-int bf_ctx_set_cgen(struct bf_cgen *cgen);
-
-/**
- * Delete a codegen from the context.
- *
- * @param cgen Codegen to delete from the context. The codegen will be freed.
- *        Can't be NULL.
- * @param unload Unload the codegen from the system before deleting it.
- * @return 0 on success, or negative errno value on failure.
- */
-int bf_ctx_delete_cgen(struct bf_cgen *cgen, bool unload);
-
-/**
  * Get the daemon's original namespaces.
  *
  * During the creation of the global context, the daemon will open a reference

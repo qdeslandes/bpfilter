@@ -270,88 +270,6 @@ static int _bf_ctx_pack(const struct bf_ctx *ctx, bf_wpack_t *pack)
     return bf_wpack_is_valid(pack) ? 0 : -EINVAL;
 }
 
-/**
- * See @ref bf_ctx_get_cgen for details.
- */
-static struct bf_cgen *_bf_ctx_get_cgen(const struct bf_ctx *ctx,
-                                        const char *name)
-{
-    assert(ctx);
-    assert(name);
-
-    bf_list_foreach (&ctx->cgens, cgen_node) {
-        struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
-
-        if (bf_streq(cgen->chain->name, name))
-            return cgen;
-    }
-
-    return NULL;
-}
-
-/**
- * See @ref bf_ctx_get_cgens_for_front for details.
- */
-static int _bf_ctx_get_cgens_for_front(const struct bf_ctx *ctx, bf_list *cgens,
-                                       enum bf_front front)
-{
-    _clean_bf_list_ bf_list _cgens =
-        bf_list_default(cgens->ops.free, cgens->ops.pack);
-    int r;
-
-    assert(ctx);
-    assert(cgens);
-
-    bf_list_foreach (&ctx->cgens, cgen_node) {
-        struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
-
-        if (cgen->front != front)
-            continue;
-
-        r = bf_list_add_tail(&_cgens, cgen);
-        if (r)
-            return bf_err_r(r, "failed to insert codegen into list");
-    }
-
-    *cgens = bf_list_move(_cgens);
-
-    return 0;
-}
-
-/**
- * See @ref bf_ctx_set_cgen for details.
- */
-static int _bf_ctx_set_cgen(struct bf_ctx *ctx, struct bf_cgen *cgen)
-{
-    assert(ctx);
-    assert(cgen);
-
-    if (_bf_ctx_get_cgen(ctx, cgen->chain->name))
-        return bf_err_r(-EEXIST, "codegen already exists in context");
-
-    return bf_list_add_tail(&ctx->cgens, cgen);
-}
-
-static int _bf_ctx_delete_cgen(struct bf_ctx *ctx, struct bf_cgen *cgen,
-                               bool unload)
-{
-    bf_list_foreach (&ctx->cgens, cgen_node) {
-        struct bf_cgen *_cgen = bf_list_node_get_data(cgen_node);
-
-        if (_cgen != cgen)
-            continue;
-
-        if (unload)
-            bf_cgen_unload(_cgen);
-
-        bf_list_delete(&ctx->cgens, cgen_node);
-
-        return 0;
-    }
-
-    return -ENOENT;
-}
-
 int bf_ctx_setup(void)
 {
     _free_bf_ctx_ struct bf_ctx *_ctx = NULL;
@@ -431,26 +349,6 @@ bool bf_ctx_is_empty(void)
 void bf_ctx_dump(prefix_t *prefix)
 {
     _bf_ctx_dump(_bf_global_ctx, prefix);
-}
-
-struct bf_cgen *bf_ctx_get_cgen(const char *name)
-{
-    return _bf_ctx_get_cgen(_bf_global_ctx, name);
-}
-
-int bf_ctx_get_cgens_for_front(bf_list *cgens, enum bf_front front)
-{
-    return _bf_ctx_get_cgens_for_front(_bf_global_ctx, cgens, front);
-}
-
-int bf_ctx_set_cgen(struct bf_cgen *cgen)
-{
-    return _bf_ctx_set_cgen(_bf_global_ctx, cgen);
-}
-
-int bf_ctx_delete_cgen(struct bf_cgen *cgen, bool unload)
-{
-    return _bf_ctx_delete_cgen(_bf_global_ctx, cgen, unload);
 }
 
 struct bf_ns *bf_ctx_get_ns(void)

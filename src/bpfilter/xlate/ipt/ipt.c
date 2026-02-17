@@ -412,10 +412,6 @@ static int _bf_ipt_gen_get_ruleset(struct bf_ipt_gen_ruleset_entry *ruleset,
 
     assert(ruleset);
 
-    r = bf_ctx_get_cgens_for_front(&cgens, BF_FRONT_IPT);
-    if (r)
-        return bf_err_r(r, "failed to collect codegens for BF_FRONT_IPT");
-
     bf_list_foreach (&cgens, cgen_node) {
         struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
 
@@ -654,10 +650,6 @@ static int _bf_ipt_ruleset_set(const struct bf_request *req)
     if (r)
         return bf_err_r(r, "failed to translate iptables ruleset");
 
-    r = bf_ctx_get_cgens_for_front(&_cur_cgens, BF_FRONT_IPT);
-    if (r)
-        return bf_err_r(r, "failed to get existing bf_cgen for BF_FRONT_IPT");
-
     bf_list_foreach (&_cur_cgens, cgen_node) {
         struct bf_cgen *cgen = bf_list_node_get_data(cgen_node);
         enum bf_nf_inet_hooks hook = bf_hook_to_nf_hook(cgen->chain->hook);
@@ -704,14 +696,6 @@ static int _bf_ipt_ruleset_set(const struct bf_request *req)
             if (r) {
                 bf_err(
                     "failed to load a program for iptables hook %d, skipping",
-                    i);
-                continue;
-            }
-
-            r = bf_ctx_set_cgen(cgen);
-            if (r) {
-                bf_err_r(
-                    r, "failed to store codegen for iptables hook %d, skipping",
                     i);
                 continue;
             }

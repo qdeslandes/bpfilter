@@ -447,3 +447,61 @@ int bf_send(int fd, const struct bf_request *request,
 
     return 0;
 }
+
+struct bf_dir_iter bf_dir_iter_init(int dir_fd)
+{
+    struct bf_dir_iter iter = {.dir = NULL, .child_name = NULL};
+    _cleanup_close_ int fd = -1;
+
+    fd = dup(dir_fd);
+    if (fd < 0)
+        return iter;
+
+    iter.dir = fdopendir(fd);
+    if (!iter.dir)
+        return iter;
+
+    TAKE_FD(fd);
+
+    return iter;
+}
+
+bool bf_dir_iter_next(struct bf_dir_iter *iter)
+{
+    DIR *dir;
+    struct dirent *entry;
+
+    assert(iter);
+
+    dir = iter->dir;
+    if (!dir)
+        return false;
+
+    while ((entry = readdir(dir))) {
+        if (bf_streq(entry->d_name, ".") || bf_streq(entry->d_name, ".."))
+            continue;
+
+        if (entry->d_type == DT_UNKNOWN) {
+            struct stat stat;
+            if (fstatat(dirfd(dir), entry->d_name, &stat, 0) < 0)
+                continue;
+            if (!S_ISDIR(stat.st_mode))
+                continue;
+        } else if (entry->d_type != DT_DIR) {
+            continue;
+        }
+
+        iter->child_name = entry->d_name;
+        return true;
+    }
+
+    return false;
+}
+
+void bf_dir_iter_clean(struct bf_dir_iter *iter)
+{
+    if (iter->dir) {
+        closedir(iter->dir);
+        iter->dir = NULL;
+    }
+}
