@@ -56,6 +56,8 @@ enum bf_log_level
     bf_logger_get_color((color), BF_STYLE_BOLD), bf_log_level_to_str(level),   \
         bf_logger_get_color(BF_COLOR_RESET, BF_STYLE_RESET)
 
+#define bf_log_oom() bf_err_r(-ENOMEM, "failed to allocated memory");
+
 /**
  * Log an error message to stderr.
  *

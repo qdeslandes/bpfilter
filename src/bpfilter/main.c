@@ -33,18 +33,6 @@
 static volatile sig_atomic_t _bf_stop_received = 0;
 
 /**
- * Path to bpfilter's runtime context file.
- *
- * bpfilter will periodically save its internal context back to disk, to prevent
- * spurious service interruption to lose information about the current state of
- * the daemon.
- *
- * This runtime context is read back when the daemon is restarted, so bpfilter
- * can manage the BPF programs that survived the daemon reboot.
- */
-static const char *ctx_path = BF_RUNTIME_DIR "/data.bin";
-
-/**
  * Set atomic flag to stop the daemon if specific signals are received.
  *
  * @param sig Signal number.
@@ -93,7 +81,7 @@ static int _bf_init(int argc, char *argv[])
     if (r)
         return bf_err_r(r, "failed to ensure runtime directory exists");
 
-    r = bf_ctx_setup();
+    r = bf_ctx_new(&global_ctx, bf_opts_bpffs_path(), bf_opts_with_bpf_token());
     if (r < 0)
         return bf_err_r(r, "failed to setup context");
 
@@ -107,19 +95,12 @@ static int _bf_init(int argc, char *argv[])
  */
 static int _bf_clean(void)
 {
-    _cleanup_close_ int pindir_fd = -1;
-    int r;
-
-    bf_ctx_teardown(bf_opts_transient());
-
-    r = bf_ctx_rm_pindir();
-    if (r < 0 && r != -ENOENT && errno != -ENOTEMPTY)
-        return bf_err_r(r, "failed to remove pin directory");
+    bf_ctx_free(&global_ctx);
 
     return 0;
 }
 
-int bf_cli_request_handler(const struct bf_request *request,
+int bf_cli_request_handler(bf_ctx_t *ctx, const struct bf_request *request,
                            struct bf_response **response);
 
 /**

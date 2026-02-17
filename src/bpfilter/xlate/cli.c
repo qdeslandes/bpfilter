@@ -17,6 +17,7 @@
 #include <bpfilter/request.h>
 #include <bpfilter/response.h>
 
+#include "bpfilter/ctx.h"
 #include "bpfilter/set.h"
 #include "cgen/cgen.h"
 #include "cgen/handle.h"
@@ -71,7 +72,7 @@ static struct bf_cgen *_bf_get_cgen(const char *name)
     return cgen;
 }
 
-int _bf_cli_ruleset_flush(const struct bf_request *request,
+int _bf_cli_ruleset_flush(bf_ctx_t *ctx, const struct bf_request *request,
                           struct bf_response **response)
 {
     _clean_bf_list_ bf_list cgens = bf_list_default(bf_cgen_free, NULL);
@@ -94,7 +95,7 @@ int _bf_cli_ruleset_flush(const struct bf_request *request,
     return 0;
 }
 
-static int _bf_cli_ruleset_get(const struct bf_request *request,
+static int _bf_cli_ruleset_get(bf_ctx_t *ctx, const struct bf_request *request,
                                struct bf_response **response)
 {
     _clean_bf_list_ bf_list cgens = bf_list_default(bf_cgen_free, NULL);
@@ -154,7 +155,7 @@ static int _bf_cli_ruleset_get(const struct bf_request *request,
     return bf_response_new_from_pack(response, pack);
 }
 
-int _bf_cli_ruleset_set(const struct bf_request *request,
+int _bf_cli_ruleset_set(bf_ctx_t *ctx, const struct bf_request *request,
                         struct bf_response **response)
 {
     _clean_bf_list_ bf_list cgens = bf_list_default(NULL, NULL);
@@ -224,7 +225,7 @@ err_load:
     return r;
 }
 
-int _bf_cli_chain_set(const struct bf_request *request,
+int _bf_cli_chain_set(bf_ctx_t *ctx, const struct bf_request *request,
                       struct bf_response **response)
 {
     _free_bf_cgen_ struct bf_cgen *cgen = NULL;
@@ -278,7 +279,7 @@ int _bf_cli_chain_set(const struct bf_request *request,
     return 0;
 }
 
-static int _bf_cli_chain_get(const struct bf_request *request,
+static int _bf_cli_chain_get(bf_ctx_t *ctx, const struct bf_request *request,
                              struct bf_response **response)
 {
     _clean_bf_list_ bf_list counters =
@@ -331,7 +332,7 @@ static int _bf_cli_chain_get(const struct bf_request *request,
     return bf_response_new_from_pack(response, wpack);
 }
 
-int _bf_cli_chain_prog_fd(const struct bf_request *request,
+int _bf_cli_chain_prog_fd(bf_ctx_t *ctx, const struct bf_request *request,
                           struct bf_response **response)
 {
     _free_bf_cgen_ struct bf_cgen *cgen = NULL;
@@ -364,7 +365,7 @@ int _bf_cli_chain_prog_fd(const struct bf_request *request,
     return 0;
 }
 
-int _bf_cli_chain_logs_fd(const struct bf_request *request,
+int _bf_cli_chain_logs_fd(bf_ctx_t *ctx, const struct bf_request *request,
                           struct bf_response **response)
 {
     _free_bf_cgen_ struct bf_cgen *cgen = NULL;
@@ -397,7 +398,7 @@ int _bf_cli_chain_logs_fd(const struct bf_request *request,
     return 0;
 }
 
-int _bf_cli_chain_load(const struct bf_request *request,
+int _bf_cli_chain_load(bf_ctx_t *ctx, const struct bf_request *request,
                        struct bf_response **response)
 {
     _free_bf_cgen_ struct bf_cgen *cgen = NULL;
@@ -440,7 +441,7 @@ int _bf_cli_chain_load(const struct bf_request *request,
     return r;
 }
 
-int _bf_cli_chain_attach(const struct bf_request *request,
+int _bf_cli_chain_attach(bf_ctx_t *ctx, const struct bf_request *request,
                          struct bf_response **response)
 {
     _free_bf_chain_ struct bf_chain *chain = NULL;
@@ -488,7 +489,7 @@ int _bf_cli_chain_attach(const struct bf_request *request,
     return r;
 }
 
-int _bf_cli_chain_update(const struct bf_request *request,
+int _bf_cli_chain_update(bf_ctx_t *ctx, const struct bf_request *request,
                          struct bf_response **response)
 {
     _free_bf_chain_ struct bf_chain *chain = NULL;
@@ -524,7 +525,7 @@ int _bf_cli_chain_update(const struct bf_request *request,
     return r;
 }
 
-int _bf_cli_chain_flush(const struct bf_request *request,
+int _bf_cli_chain_flush(bf_ctx_t *ctx, const struct bf_request *request,
                         struct bf_response **response)
 {
     _free_bf_cgen_ struct bf_cgen *cgen = NULL;
@@ -554,7 +555,7 @@ int _bf_cli_chain_flush(const struct bf_request *request,
     return 0;
 }
 
-int _bf_cli_chain_update_set(const struct bf_request *request,
+int _bf_cli_chain_update_set(bf_ctx_t *ctx, const struct bf_request *request,
                              struct bf_response **response)
 {
     _free_bf_set_ struct bf_set *to_add = NULL;
@@ -624,7 +625,7 @@ int _bf_cli_chain_update_set(const struct bf_request *request,
     return 0;
 }
 
-int bf_cli_request_handler(const struct bf_request *request,
+int bf_cli_request_handler(bf_ctx_t *ctx, const struct bf_request *request,
                            struct bf_response **response)
 {
     int r;
@@ -634,40 +635,40 @@ int bf_cli_request_handler(const struct bf_request *request,
 
     switch (bf_request_cmd(request)) {
     case BF_REQ_RULESET_FLUSH:
-        r = _bf_cli_ruleset_flush(request, response);
+        r = _bf_cli_ruleset_flush(ctx, request, response);
         break;
     case BF_REQ_RULESET_SET:
-        r = _bf_cli_ruleset_set(request, response);
+        r = _bf_cli_ruleset_set(ctx, request, response);
         break;
     case BF_REQ_RULESET_GET:
-        r = _bf_cli_ruleset_get(request, response);
+        r = _bf_cli_ruleset_get(ctx, request, response);
         break;
     case BF_REQ_CHAIN_SET:
-        r = _bf_cli_chain_set(request, response);
+        r = _bf_cli_chain_set(ctx, request, response);
         break;
     case BF_REQ_CHAIN_GET:
-        r = _bf_cli_chain_get(request, response);
+        r = _bf_cli_chain_get(ctx, request, response);
         break;
     case BF_REQ_CHAIN_PROG_FD:
-        r = _bf_cli_chain_prog_fd(request, response);
+        r = _bf_cli_chain_prog_fd(ctx, request, response);
         break;
     case BF_REQ_CHAIN_LOGS_FD:
-        r = _bf_cli_chain_logs_fd(request, response);
+        r = _bf_cli_chain_logs_fd(ctx, request, response);
         break;
     case BF_REQ_CHAIN_LOAD:
-        r = _bf_cli_chain_load(request, response);
+        r = _bf_cli_chain_load(ctx, request, response);
         break;
     case BF_REQ_CHAIN_ATTACH:
-        r = _bf_cli_chain_attach(request, response);
+        r = _bf_cli_chain_attach(ctx, request, response);
         break;
     case BF_REQ_CHAIN_UPDATE:
-        r = _bf_cli_chain_update(request, response);
+        r = _bf_cli_chain_update(ctx, request, response);
         break;
     case BF_REQ_CHAIN_FLUSH:
-        r = _bf_cli_chain_flush(request, response);
+        r = _bf_cli_chain_flush(ctx, request, response);
         break;
     case BF_REQ_CHAIN_UPDATE_SET:
-        r = _bf_cli_chain_update_set(request, response);
+        r = _bf_cli_chain_update_set(ctx, request, response);
         break;
     default:
         r = bf_err_r(-EINVAL, "unsupported command %d for CLI front-end",

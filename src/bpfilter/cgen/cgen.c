@@ -30,16 +30,14 @@
 #include "ctx.h"
 #include "opts.h"
 
-#define _BF_PROG_NAME "bf_prog"
-
-static int _bf_cgen_get_chain_pindir_fd(const char *name)
+static int _bf_cgen_get_chain_pindir_fd(bf_ctx_t *ctx, const char *name)
 {
     _cleanup_close_ int bf_fd = -1;
     _cleanup_close_ int chain_fd = -1;
 
     assert(name);
 
-    bf_fd = bf_ctx_get_pindir_fd();
+    bf_fd = bf_ctx_get_pindir_fd(ctx);
     if (bf_fd < 0)
         return bf_fd;
 
@@ -50,12 +48,13 @@ static int _bf_cgen_get_chain_pindir_fd(const char *name)
     return TAKE_FD(chain_fd);
 }
 
-int bf_cgen_new(struct bf_cgen **cgen, struct bf_chain **chain)
+int bf_cgen_new(struct bf_cgen **cgen, bf_ctx_t *ctx, struct bf_chain **chain)
 {
     _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
     int r;
 
     assert(cgen);
+    assert(ctx);
     assert(chain);
 
     _cgen = calloc(1, sizeof(*_cgen));
@@ -66,50 +65,20 @@ int bf_cgen_new(struct bf_cgen **cgen, struct bf_chain **chain)
     if (r)
         return r;
 
+    _cgen->ctx = ctx;
     _cgen->chain = TAKE_PTR(*chain);
     *cgen = TAKE_PTR(_cgen);
 
     return 0;
 }
 
-int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node)
-{
-    _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
-    _free_bf_chain_ struct bf_chain *chain = NULL;
-    bf_rpack_node_t child;
-    int r;
-
-    assert(cgen);
-
-    _cgen = calloc(1, sizeof(*_cgen));
-    if (!_cgen)
-        return -ENOMEM;
-
-    r = bf_rpack_kv_obj(node, "chain", &child);
-    if (r)
-        return bf_rpack_key_err(r, "bf_cgen.chain");
-
-    r = bf_chain_new_from_pack(&_cgen->chain, child);
-    if (r)
-        return bf_rpack_key_err(r, "bf_cgen.chain");
-
-    chain = TAKE_PTR(_cgen->chain);
-
-    r = bf_handle_new_from_dir(&_cgen->handle, chain->name, &_cgen->chain);
-    if (r)
-        return r;
-
-    *cgen = TAKE_PTR(_cgen);
-
-    return 0;
-}
-
-int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name)
+int bf_cgen_new_from_name(struct bf_cgen **cgen, bf_ctx_t *ctx, const char *name)
 {
     _free_bf_cgen_ struct bf_cgen *_cgen = NULL;
     int r;
 
     assert(cgen);
+    assert(ctx);
     assert(name);
 
     _cgen = calloc(1, sizeof(*_cgen));
@@ -119,6 +88,8 @@ int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name)
     r = bf_handle_new_from_dir(&_cgen->handle, name, &_cgen->chain);
     if (r)
         return r;
+
+    _cgen->ctx = ctx;
 
     *cgen = TAKE_PTR(_cgen);
 
@@ -139,22 +110,6 @@ void bf_cgen_free(struct bf_cgen **cgen)
 
     free(*cgen);
     *cgen = NULL;
-}
-
-int bf_cgen_pack(const struct bf_cgen *cgen, bf_wpack_t *pack)
-{
-    assert(cgen);
-    assert(pack);
-
-    bf_wpack_open_object(pack, "chain");
-    bf_chain_pack(cgen->chain, pack);
-    bf_wpack_close_object(pack);
-
-    bf_wpack_open_object(pack, "handle");
-    bf_handle_pack(cgen->handle, pack);
-    bf_wpack_close_object(pack);
-
-    return bf_wpack_is_valid(pack) ? 0 : -EINVAL;
 }
 
 void bf_cgen_dump(const struct bf_cgen *cgen, prefix_t *prefix)

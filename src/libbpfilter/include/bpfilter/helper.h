@@ -254,6 +254,24 @@ static inline void freep(void *ptr)
     *(void **)ptr = NULL;
 }
 
+#define bf_free(p)                                                             \
+    do {                                                                       \
+        free((void *)(p));                                                     \
+        (p) = NULL;                                                            \
+    } while (0)
+
+#define bf_close(fd)                                                           \
+    do {                                                                       \
+        if ((fd) < 0)                                                          \
+            break;                                                             \
+                                                                               \
+        if (close((fd))) {                                                     \
+            bf_warn_r(errno, "failed to close FD %d, assuming file is closed", \
+                      (fd));                                                   \
+        }                                                                      \
+                                                                               \
+        (fd) = -1;                                                             \
+    } while (0)
 /**
  * Close a file descriptor and set it to -1.
  *

@@ -12,6 +12,8 @@
 #include <bpfilter/list.h>
 #include <bpfilter/pack.h>
 
+#include "ctx.h"
+
 struct bf_chain;
 struct bf_handle;
 struct bf_ns;
@@ -27,6 +29,9 @@ struct bf_hookopts;
  */
 struct bf_cgen
 {
+    /// Runtime context used by bpfilter.
+    bf_ctx_t *ctx;
+
     /// Chain containing the rules, sets, and policy.
     struct bf_chain *chain;
 
@@ -47,20 +52,9 @@ struct bf_cgen
  *        a valid @ref bf_chain .
  * @return 0 on success, or negative errno value on failure.
  */
-int bf_cgen_new(struct bf_cgen **cgen, struct bf_chain **chain);
+int bf_cgen_new(struct bf_cgen **cgen, bf_ctx_t *ctx, struct bf_chain **chain);
 
-/**
- * @brief Allocate and initialize a new codegen from serialized data.
- *
- * @param cgen Codegen object to allocate and initialize from the serialized
- *        data. The caller will own the object. On failure, `*cgen` is
- *        unchanged. Can't be NULL.
- * @param node Node containing the serialized codegen.
- * @return 0 on success, or a negative errno value on failure.
- */
-int bf_cgen_new_from_pack(struct bf_cgen **cgen, bf_rpack_node_t node);
-
-int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name);
+int bf_cgen_new_from_name(struct bf_cgen **cgen, bf_ctx_t *ctx, const char *name);
 
 /**
  * Free a codegen.
@@ -73,15 +67,6 @@ int bf_cgen_new_from_name(struct bf_cgen **cgen, const char *name);
  * @param cgen Codegen to free. Can't be NULL.
  */
 void bf_cgen_free(struct bf_cgen **cgen);
-
-/**
- * @brief Serialize a codegen.
- *
- * @param cgen Codegen to serialize. Can't be NULL.
- * @param pack `bf_wpack_t` object to serialize the codegen into. Can't be NULL.
- * @return 0 on success, or a negative error value on failure.
- */
-int bf_cgen_pack(const struct bf_cgen *cgen, bf_wpack_t *pack);
 
 /**
  * @brief Set a chain.

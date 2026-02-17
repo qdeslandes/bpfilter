@@ -8,101 +8,135 @@
 #include <stdbool.h>
 
 #include <bpfilter/dump.h>
-#include <bpfilter/list.h>
-#include <bpfilter/pack.h>
+#include <bpfilter/ns.h>
 
 #include "cgen/elfstub.h"
 
 /**
  * @file ctx.h
  *
- * Global runtime context for @c bpfilter daemon.
+ * Runtime context for bpfilter.
  *
- * This file contains the definition of the @ref bf_ctx structure, which is
- * the main structure used to store the daemon's runtime context.
- *
- * All the public @c bf_ctx_* functions manipulate a private global context.
- * This context can be serialized and deserialized to restore the daemon's
- * runtime context if bpfilter is restarted.
- *
- * The @c bf_ctx structure contains an array of lists containing the codegens.
- * There is a list of codegen for each hook. Some hooks allow for multiple
- * codegens to be defined (e.g. XDP, TC), but others do not
- * (e.g. BF_HOOK_NF_LOCAL_IN) in which case the list contains a single codegen.
+ * The runtime context (`bf_ctx`) stores the configuration and state
+ * required to generate and manage BPF programs: the path to the BPF
+ * filesystem used for pinning, an optional BPF token for unprivileged
+ * operations, the daemon's original namespaces, and lazily-loaded ELF stubs
+ * integrated into the generated programs.
  */
 
-struct bf_cgen;
-struct bf_ns;
+/**
+ * @struct bf_ctx
+ *
+ * bpfilter runtime context, used to cache options and data to manipulate chains
+ * more efficiently.
+ */
+struct bf_ctx
+{
+    /// Path to the BPF filesystem to use for pinning objects and BPF token.
+    const char *bpffs_path;
+
+    /// BPF token file descriptor
+    int token_fd;
+
+    /// Namespaces the daemon was started in.
+    struct bf_ns ns;
+
+    /// Elf stubs used by the BPF programs, lazy loaded
+    struct bf_elfstub *stubs[_BF_ELFSTUB_MAX];
+};
+
+typedef struct bf_ctx bf_ctx_t;
+
+extern bf_ctx_t *global_ctx;
+
+#define _free_bf_ctx_ __attribute__((cleanup(bf_ctx_free)))
 
 /**
- * Initialise the global context.
+ * @brief Allocate and intializes a bpfilter runtime context.
  *
+ * @param ctx Context to allocate and initialize. Can't be NULL. On success,
+ *        `*ctx` points to the new context and the caller is responsible for
+ *         freeing it using `bf_ctx_free`. On error, `*ctx` is unchanged.
+ * @param bpffs_path Path to the BPF filesystem to pin chains to. If NULL,
+ *        the default path `/sys/fs/bpf` is used. All the chains will be pinned
+ *        into the subdirectory `<bpffs_path>/bpfilter`.
+ * @param with_bpf_token If true, create a BPF token from `bpffs_path` (or the
+ *        default BPF FS path if NULL). The token will be used to perform
+ *        sensitive operation from a user namespace, not all operations are
+ *        supported (i.e. reading objects from `bpffs_path`).
  * @return 0 on success, or a negative errno value on failure.
  */
-int bf_ctx_setup(void);
+int bf_ctx_new(bf_ctx_t **ctx, const char *bpffs_path, bool with_bpf_token);
 
 /**
- * Teardown the global context.
+ * @brief Cleanup and free a bpfilter runtime contxt.
  *
- * If @ref bf_ctx_save has not been called prior to this function, the runtime
- * context will be lost: if bpfilter is stopped and @c clear is false, bpfilter
- * will lost track of its BPF objects.
- *
- * @param clear If true, all the BPF programs will be unloaded before clearing
- *        the context.
+ * @param ctx Context to cleanup and free. Can't be NULL. If `*ctx` is NULL,
+ *        this function has no effect.
  */
-void bf_ctx_teardown(bool clear);
+void bf_ctx_free(bf_ctx_t **ctx);
 
 /**
- * Dump the global context.
+ * @brief Dump a bpfilter runtime context.
  *
- * @param prefix Prefix to use for the dump.
+ * @param ctx Context to dump to stdout. Can't be NULL.
+ * @param prefix Prefix for each line logged, or NULL for no prefix.
  */
-void bf_ctx_dump(prefix_t *prefix);
+void bf_ctx_dump(const bf_ctx_t *ctx, prefix_t *prefix);
 
 /**
- * Get the daemon's original namespaces.
+ * @brief Get a ELF stub by ID.
  *
- * During the creation of the global context, the daemon will open a reference
- * to its namespaces. This is required to jump a a client's namespace on request
- * and come back to the original namespace afterward. This function returns a
- * pointer to the `bf_ns` object referencing the original namespaces.
+ * The ELF stubs are lazily loaded into the context: the ELF stub is created
+ * the first time it is requested, then it is cached in the context.
  *
- * @return A `bf_ns` object pointer.
+ * @param ctx Context to fetch the ELF stub for. Can't be NULL.
+ * @param id ID of the ELF stub to request.
+ * @return Non-owning pointer to an ELF stub on success, or NULL on failure.
  */
-struct bf_ns *bf_ctx_get_ns(void);
+const struct bf_elfstub *bf_ctx_get_elfstub(bf_ctx_t *ctx,
+                                            enum bf_elfstub_id id);
 
 /**
- * Get the BPF token file descriptor.
+ * @brief Get a file descriptor to the directory to pin the BPF objects into.
  *
- * @return The BPF token file descriptor, or -1 if no token is used.
+ * BPF objects are pinned within a subdirectory of `ctx->bpffs_path`. The
+ * subdirectory is created (if needed) when the file descriptor is opened.
+ *
+ * @param ctx Context to get the pin directory file descriptor for. Can't be NULL.
+ * @return Owning file descriptor to a pin directory, or a negative errno
+ *         value on error.
  */
-int bf_ctx_token(void);
+int bf_ctx_get_pindir_fd(const bf_ctx_t *ctx);
 
 /**
- * @brief Return a file descriptor to bpfilter's pin directory.
+ * @brief Get the daemon's original namespaces.
  *
- * @return File descriptor to bpfilter's pin directory, or a negative errno
- *         value on failure.
+ * During the creation of the bpfilter runtime context, a reference to the
+ * current namespace is collected. When attaching the BPF program, the daemon
+ * will jump to the client's namespace before performing the BPF system call
+ * before jumping back to its original namespace.
+ *
+ * @param ctx Context to get the namespace for. Can't be NULL.
+ * @return Non-owning pointer to the daemon's namespace.
  */
-int bf_ctx_get_pindir_fd(void);
+static inline const struct bf_ns *bf_ctx_get_ns(const bf_ctx_t *ctx)
+{
+    assert(ctx);
+
+    return &ctx->ns;
+}
 
 /**
- * @brief Remove the pin directory.
+ * @brief Get the file descriptor of the BPF token.
  *
- * If the pin directory can't be removed, an error is printed. However, if it's
- * due to the directory not being empty, or not existing, no error is printed,
- * but the errno value is returned anyway. The called will know how to deal with
- * this situation.
- *
- * @return 0 on success, or a negative errno value on failure.
+ * @param ctx Context to get the BPF token for. Can't be NULL.
+ * @return Non-owning BPF token of `ctx` (should not be closed). If no BPF
+ *         token has been created, `-1` is returned.
  */
-int bf_ctx_rm_pindir(void);
+static inline int bf_ctx_get_token_fd(const bf_ctx_t *ctx)
+{
+    assert(ctx);
 
-/**
- * @brief Get a ELF stub from its ID.
- *
- * @param id ID of the ELF stub to retrieve.
- * @return The requested ELF stub.
- */
-const struct bf_elfstub *bf_ctx_get_elfstub(enum bf_elfstub_id id);
+    return ctx->token_fd;
+}
