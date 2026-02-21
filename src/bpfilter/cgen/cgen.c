@@ -163,7 +163,7 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
 
     assert(cgen);
 
-    r = bf_program_new(&prog, cgen->chain, cgen->handle);
+    r = bf_program_new(&prog, cgen->ctx, cgen->chain, cgen->handle);
     if (r < 0)
         return r;
 
@@ -176,7 +176,7 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
         return bf_err_r(r, "failed to load the chain");
 
     if (hookopts) {
-        r = bf_ns_set(ns, bf_ctx_get_ns());
+        r = bf_ns_set(ns, bf_ctx_get_ns(cgen->ctx));
         if (r)
             return bf_err_r(r, "failed to switch to the client's namespaces");
 
@@ -184,11 +184,11 @@ int bf_cgen_set(struct bf_cgen *cgen, const struct bf_ns *ns,
         if (r < 0)
             return bf_err_r(r, "failed to load and attach the chain");
 
-        if (bf_ns_set(bf_ctx_get_ns(), ns))
+        if (bf_ns_set(bf_ctx_get_ns(cgen->ctx), ns))
             bf_abort("failed to restore previous namespaces, aborting");
     }
 
-    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    r = bf_handle_persist_context(cgen->handle, cgen->chain, bf_ctx_get_token_fd(cgen->ctx));
     if (r)
         return bf_err_r(r, "failed to persist ctx");
 
@@ -208,7 +208,7 @@ int bf_cgen_load(struct bf_cgen *cgen)
 
     assert(cgen);
 
-    r = bf_program_new(&prog, cgen->chain, cgen->handle);
+    r = bf_program_new(&prog, cgen->ctx, cgen->chain, cgen->handle);
     if (r < 0)
         return r;
 
@@ -220,7 +220,7 @@ int bf_cgen_load(struct bf_cgen *cgen)
     if (r < 0)
         return bf_err_r(r, "failed to load the chain");
 
-    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    r = bf_handle_persist_context(cgen->handle, cgen->chain, bf_ctx_get_token_fd(cgen->ctx));
     if (r)
         return bf_err_r(r, "failed to persist ctx");
 
@@ -251,12 +251,12 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
     bf_hookopts_dump(*hookopts, EMPTY_PREFIX);
 
     if (bf_opts_persist()) {
-        pindir_fd = _bf_cgen_get_chain_pindir_fd(cgen->chain->name);
+        pindir_fd = _bf_cgen_get_chain_pindir_fd(cgen->ctx, cgen->chain->name);
         if (pindir_fd < 0)
             return pindir_fd;
     }
 
-    r = bf_ns_set(ns, bf_ctx_get_ns());
+    r = bf_ns_set(ns, bf_ctx_get_ns(cgen->ctx));
     if (r)
         return bf_err_r(r, "failed to switch to the client's namespaces");
 
@@ -264,10 +264,10 @@ int bf_cgen_attach(struct bf_cgen *cgen, const struct bf_ns *ns,
     if (r < 0)
         return bf_err_r(r, "failed to attach chain '%s'", cgen->chain->name);
 
-    if (bf_ns_set(bf_ctx_get_ns(), ns))
+    if (bf_ns_set(bf_ctx_get_ns(cgen->ctx), ns))
         bf_abort("failed to restore previous namespaces, aborting");
 
-    r = bf_handle_persist_context(cgen->handle, cgen->chain);
+    r = bf_handle_persist_context(cgen->handle, cgen->chain, bf_ctx_get_token_fd(cgen->ctx));
     if (r)
         return bf_err_r(r, "failed to persist ctx");
 
@@ -291,7 +291,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
     if (r)
         return r;
 
-    r = bf_program_new(&new_prog, *new_chain, new_handle);
+    r = bf_program_new(&new_prog, cgen->ctx, *new_chain, new_handle);
     if (r < 0)
         return bf_err_r(r, "failed to create a new bf_program");
 
@@ -323,7 +323,7 @@ int bf_cgen_update(struct bf_cgen *cgen, struct bf_chain **new_chain)
     bf_chain_free(&cgen->chain);
     cgen->chain = TAKE_PTR(*new_chain);
 
-    r = bf_handle_persist_context(new_handle, cgen->chain);
+    r = bf_handle_persist_context(new_handle, cgen->chain, bf_ctx_get_token_fd(cgen->ctx));
     if (r)
         return bf_err_r(r, "failed to persist ctx");
 

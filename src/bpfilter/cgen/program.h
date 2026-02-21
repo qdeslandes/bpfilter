@@ -188,10 +188,15 @@ struct bf_chain;
 struct bf_counter;
 struct bf_hookopts;
 struct bf_handle;
+typedef struct bf_ctx bf_ctx_t;
 
 struct bf_program
 {
     enum bf_flavor flavor;
+
+    /** Non-owning pointer to the runtime context, used for BPF token and
+     * ELF stubs during loading. */
+    bf_ctx_t *ctx;
 
     /// Log messages printer
     struct bf_printer *printer;
@@ -227,13 +232,14 @@ struct bf_program
  * @brief Allocate and initialize a new `bf_program` object.
  *
  * @param program `bf_program` object to allocate and initialize. Can't be NULL.
+ * @param ctx Runtime context. Can't be NULL.
  * @param chain Chain the program is generated from. Can't be NULL.
  * @param handle Handle to store BPF object references in. The program borrows
  *        this pointer (non-owning). Can't be NULL.
  * @return 0 on success, or a negative error value on failure.
  */
-int bf_program_new(struct bf_program **program, const struct bf_chain *chain,
-                   struct bf_handle *handle);
+int bf_program_new(struct bf_program **program, bf_ctx_t *ctx,
+                   const struct bf_chain *chain, struct bf_handle *handle);
 
 void bf_program_free(struct bf_program **program);
 

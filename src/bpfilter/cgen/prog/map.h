@@ -59,7 +59,8 @@ struct bf_map
  * @return 0 on success, or a negative errno value on error.
  */
 int bf_map_new(struct bf_map **map, const char *name, enum bf_map_type type,
-               size_t key_size, size_t value_size, size_t n_elems);
+               size_t key_size, size_t value_size, size_t n_elems,
+               int token_fd);
 
 /**
  * @brief Allocate and initialise a new BPF map object, from a set.
@@ -74,7 +75,7 @@ int bf_map_new(struct bf_map **map, const char *name, enum bf_map_type type,
  * @return 0 on success, or a negative error value on error.
  */
 int bf_map_new_from_set(struct bf_map **map, const char *name,
-                        const struct bf_set *set);
+                        const struct bf_set *set, int token_fd);
 
 /**
  * @brief Allocate and initialize a new map from an existing BPF map file

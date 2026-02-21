@@ -65,6 +65,10 @@
 #define _BF_LOG_MAP_N_ENTRIES 1000
 #define _BF_LOG_MAP_SIZE                                                       \
     _bf_round_next_power_of_2(sizeof(struct bf_log) * _BF_LOG_MAP_N_ENTRIES)
+#define _BF_SET_MAP_PREFIX "bf_set_"
+#define _BF_COUNTER_MAP_NAME "bf_cmap"
+#define _BF_PRINTER_MAP_NAME "bf_pmap"
+#define _BF_LOG_MAP_NAME "bf_lmap"
 
 static inline size_t _bf_round_next_power_of_2(size_t value)
 {
@@ -93,13 +97,14 @@ static const struct bf_flavor_ops *bf_flavor_ops_get(enum bf_flavor flavor)
     return flavor_ops[flavor];
 }
 
-int bf_program_new(struct bf_program **program, const struct bf_chain *chain,
-                   struct bf_handle *handle)
+int bf_program_new(struct bf_program **program, bf_ctx_t *ctx,
+                   const struct bf_chain *chain, struct bf_handle *handle)
 {
     _free_bf_program_ struct bf_program *_program = NULL;
     int r;
 
     assert(program);
+    assert(ctx);
     assert(chain);
     assert(handle);
 
@@ -108,6 +113,7 @@ int bf_program_new(struct bf_program **program, const struct bf_chain *chain,
         return -ENOMEM;
 
     _program->flavor = bf_hook_to_flavor(chain->hook);
+    _program->ctx = ctx;
     _program->runtime.ops = bf_flavor_ops_get(_program->flavor);
     _program->runtime.chain = chain;
     _program->fixups = bf_list_default(bf_fixup_free, NULL);
@@ -459,7 +465,7 @@ static int _bf_program_generate_elfstubs(struct bf_program *program)
 
         bf_dbg("generate ELF stub for ID %d", fixup->attr.elfstub_id);
 
-        elfstub = bf_ctx_get_elfstub(fixup->attr.elfstub_id);
+        elfstub = bf_ctx_get_elfstub(program->ctx, fixup->attr.elfstub_id);
         if (!elfstub) {
             return bf_err_r(-ENOENT, "no ELF stub found for ID %d",
                             fixup->attr.elfstub_id);
@@ -689,7 +695,8 @@ static int _bf_program_load_printer_map(struct bf_program *program)
         return bf_err_r(r, "failed to assemble printer map string");
 
     r = bf_map_new(&program->handle->pmap, _BF_PRINTER_MAP_NAME,
-                   BF_MAP_TYPE_PRINTER, sizeof(uint32_t), pstr_len, 1);
+                   BF_MAP_TYPE_PRINTER, sizeof(uint32_t), pstr_len, 1,
+                   bf_ctx_get_token_fd(program->ctx));
     if (r)
         return bf_err_r(r, "failed to create the printer bf_map object");
 
@@ -713,7 +720,8 @@ static int _bf_program_load_counters_map(struct bf_program *program)
     r = bf_map_new(&program->handle->cmap, _BF_COUNTER_MAP_NAME,
                    BF_MAP_TYPE_COUNTERS, sizeof(uint32_t),
                    sizeof(struct bf_counter),
-                   bf_list_size(&program->runtime.chain->rules) + 2);
+                   bf_list_size(&program->runtime.chain->rules) + 2,
+                   bf_ctx_get_token_fd(program->ctx));
     if (r)
         return bf_err_r(r, "failed to create the counters bf_map object");
 
@@ -735,7 +743,8 @@ static int _bf_program_load_log_map(struct bf_program *program)
         return 0;
 
     r = bf_map_new(&program->handle->lmap, _BF_LOG_MAP_NAME, BF_MAP_TYPE_LOG, 0,
-                   0, _BF_LOG_MAP_SIZE);
+                   0, _BF_LOG_MAP_SIZE,
+                   bf_ctx_get_token_fd(program->ctx));
     if (r)
         return bf_err_r(r, "failed to create the log bf_map object");
 
@@ -771,7 +780,8 @@ static int _bf_program_load_sets_maps(struct bf_program *new_prog)
 
         (void)snprintf(name, BPF_OBJ_NAME_LEN, _BF_SET_MAP_PREFIX "%04x",
                        (uint8_t)set_idx++);
-        r = bf_map_new_from_set(&map, name, set);
+        r = bf_map_new_from_set(&map, name, set,
+                                bf_ctx_get_token_fd(new_prog->ctx));
         if (r)
             return r;
 
@@ -841,12 +851,13 @@ int bf_program_load(struct bf_program *prog)
     if (bf_opts_is_verbose(BF_VERBOSE_BYTECODE))
         bf_program_dump_bytecode(prog);
 
-    r = bf_bpf_prog_load(prog->handle->prog_name,
+    r = bf_bpf_prog_load(prog->handle->name,
                          bf_hook_to_bpf_prog_type(prog->runtime.chain->hook),
                          prog->img, prog->img_size,
                          bf_hook_to_bpf_attach_type(prog->runtime.chain->hook),
                          log_buf, log_buf ? _BF_LOG_BUF_SIZE : 0,
-                         bf_ctx_token(), &prog->handle->prog_fd);
+                         bf_ctx_get_token_fd(prog->ctx),
+                         &prog->handle->prog_fd);
     if (r) {
         return bf_err_r(r, "failed to load bf_program (%lu bytes):\n%s\nerrno:",
                         prog->img_size, log_buf ? log_buf : "<NO LOG BUFFER>");

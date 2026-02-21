@@ -118,10 +118,11 @@ void bf_handle_dump(const struct bf_handle *handle, prefix_t *prefix);
  *
  * @param handle Handle defining the context to persist. Can't be NULL.
  * @param chain Chain to persist the context for. Can't be NULL.
+ * @param token_fd BPF token file descriptor, or -1 if no token is used.
  * @return 0 on success, or a negative error value on failure.
  */
 int bf_handle_persist_context(struct bf_handle *handle,
-                              const struct bf_chain *chain);
+                              const struct bf_chain *chain, int token_fd);
 
 /**
  * @brief Pin the BPF objects to the filesystem.

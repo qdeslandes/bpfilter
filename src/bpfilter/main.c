@@ -139,7 +139,7 @@ static int _bf_process_request(struct bf_request *request,
     bf_info("processing request %s",
             bf_request_cmd_to_str(bf_request_cmd(request)));
 
-    r = bf_cli_request_handler(request, response);
+    r = bf_cli_request_handler(global_ctx, request, response);
     if (r) {
         /* We failed to process the request, so we need to generate an
          * error. If the error response is successfully generated, then we

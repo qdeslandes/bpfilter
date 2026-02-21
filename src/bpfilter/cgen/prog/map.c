@@ -23,8 +23,6 @@
 #include <bpfilter/helper.h>
 #include <bpfilter/logger.h>
 
-#include "ctx.h"
-
 static const char *_bf_map_type_strs[] = {
     [BF_MAP_TYPE_COUNTERS] = "BF_MAP_TYPE_COUNTERS",
     [BF_MAP_TYPE_PRINTER] = "BF_MAP_TYPE_PRINTER",
@@ -78,7 +76,8 @@ static void _bf_btf_free(struct bf_btf **btf);
  * @param map Map associated to the BTF data. Can't be NULL.
  * @return 0 on success, or a negative errno value on failure.
  */
-static int _bf_btf_new(struct bf_btf **btf, const struct bf_map *map)
+static int _bf_btf_new(struct bf_btf **btf, const struct bf_map *map,
+                       int token_fd)
 {
     _free_bf_btf_ struct bf_btf *_btf = NULL;
     struct btf *raw;
@@ -149,7 +148,7 @@ static int _bf_btf_new(struct bf_btf **btf, const struct bf_map *map)
     if (!data)
         return bf_err_r(errno, "failed to request BTF raw data from libbpf");
 
-    r = bf_bpf_btf_load(data, data_len, bf_ctx_token());
+    r = bf_bpf_btf_load(data, data_len, token_fd);
     if (r < 0)
         return bf_err_r(r, "failed to load BTF data for bf_map");
 
@@ -173,7 +172,8 @@ static void _bf_btf_free(struct bf_btf **btf)
 
 static int _bf_map_new(struct bf_map **map, const char *name,
                        enum bf_map_type type, enum bf_bpf_map_type bpf_type,
-                       size_t key_size, size_t value_size, size_t n_elems)
+                       size_t key_size, size_t value_size, size_t n_elems,
+                       int token_fd)
 {
     _free_bf_map_ struct bf_map *_map = NULL;
     _free_bf_btf_ struct bf_btf *btf = NULL;
@@ -214,13 +214,13 @@ static int _bf_map_new(struct bf_map **map, const char *name,
     bf_strncpy(_map->name, BPF_OBJ_NAME_LEN, name);
 
     if (type != BF_MAP_TYPE_LOG) {
-        r = _bf_btf_new(&btf, _map);
+        r = _bf_btf_new(&btf, _map, token_fd);
         if (r)
             return r;
     }
 
     r = bf_bpf_map_create(name, _map->bpf_type, _map->key_size,
-                          _map->value_size, _map->n_elems, btf, bf_ctx_token());
+                          _map->value_size, _map->n_elems, btf, token_fd);
     if (r < 0)
         return bf_err_r(r, "failed to create BPF map '%s'", name);
 
@@ -231,7 +231,8 @@ static int _bf_map_new(struct bf_map **map, const char *name,
 }
 
 int bf_map_new(struct bf_map **map, const char *name, enum bf_map_type type,
-               size_t key_size, size_t value_size, size_t n_elems)
+               size_t key_size, size_t value_size, size_t n_elems,
+               int token_fd)
 {
     static enum bf_bpf_map_type _map_type_to_bpf[_BF_MAP_TYPE_MAX] = {
         [BF_MAP_TYPE_COUNTERS] = BF_BPF_MAP_TYPE_ARRAY,
@@ -250,11 +251,11 @@ int bf_map_new(struct bf_map **map, const char *name, enum bf_map_type type,
     }
 
     return _bf_map_new(map, name, type, _map_type_to_bpf[type], key_size,
-                       value_size, n_elems);
+                       value_size, n_elems, token_fd);
 }
 
 int bf_map_new_from_set(struct bf_map **map, const char *name,
-                        const struct bf_set *set)
+                        const struct bf_set *set, int token_fd)
 {
     assert(map);
     assert(name);
@@ -263,7 +264,7 @@ int bf_map_new_from_set(struct bf_map **map, const char *name,
     return _bf_map_new(map, name, BF_MAP_TYPE_SET,
                        set->use_trie ? BF_BPF_MAP_TYPE_LPM_TRIE :
                                        BF_BPF_MAP_TYPE_HASH,
-                       set->elem_size, 1, bf_list_size(&set->elems));
+                       set->elem_size, 1, bf_list_size(&set->elems), token_fd);
 }
 
 #define _free_btf_ __attribute__((__cleanup__(_bf_btf_free_wrapper)))

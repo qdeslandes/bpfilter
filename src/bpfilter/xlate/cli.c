@@ -17,8 +17,8 @@
 #include <bpfilter/request.h>
 #include <bpfilter/response.h>
 
-#include "bpfilter/ctx.h"
-#include "bpfilter/set.h"
+#include <bpfilter/set.h>
+
 #include "cgen/cgen.h"
 #include "cgen/handle.h"
 #include "cgen/prog/link.h"
@@ -33,11 +33,11 @@ static int _bf_get_all_cgen(bf_list *cgens)
 
     assert(cgens);
 
-    bf_dir_foreach(bf_ctx_get_pindir_fd(), iter)
+    bf_dir_foreach(bf_ctx_get_pindir_fd(global_ctx), iter)
     {
         _free_bf_cgen_ struct bf_cgen *cgen = NULL;
 
-        r = bf_cgen_new_from_name(&cgen, iter.child_name);
+        r = bf_cgen_new_from_name(&cgen, global_ctx, iter.child_name);
         if (r)
             return bf_err_r(r, "failed to restore cgen %s", iter.child_name);
 
@@ -61,7 +61,7 @@ static struct bf_cgen *_bf_get_cgen(const char *name)
     assert(name);
 
     bf_info("_bf_get_cgen for %s", name);
-    r = bf_cgen_new_from_name(&cgen, name);
+    r = bf_cgen_new_from_name(&cgen, global_ctx, name);
     if (r) {
         bf_info("failed _bf_get_cgen for %s", name);
         bf_err_r(r, "failed to restore cgen %s", name);
@@ -167,7 +167,7 @@ int _bf_cli_ruleset_set(bf_ctx_t *ctx, const struct bf_request *request,
 
     (void)response;
 
-    _bf_cli_ruleset_flush(NULL, NULL);
+    _bf_cli_ruleset_flush(ctx, NULL, NULL);
 
     r = bf_rpack_new(&pack, bf_request_data(request),
                      bf_request_data_len(request));
@@ -206,7 +206,7 @@ int _bf_cli_ruleset_set(bf_ctx_t *ctx, const struct bf_request *request,
             bf_cgen_free(&cgen);
         }
 
-        r = bf_cgen_new(&cgen, &chain);
+        r = bf_cgen_new(&cgen, ctx, &chain);
         if (r)
             goto err_load;
 
@@ -221,7 +221,7 @@ int _bf_cli_ruleset_set(bf_ctx_t *ctx, const struct bf_request *request,
     return 0;
 
 err_load:
-    _bf_cli_ruleset_flush(NULL, NULL);
+    _bf_cli_ruleset_flush(ctx, NULL, NULL);
     return r;
 }
 
@@ -268,7 +268,7 @@ int _bf_cli_chain_set(bf_ctx_t *ctx, const struct bf_request *request,
         bf_cgen_free(&cgen);
     }
 
-    r = bf_cgen_new(&cgen, &chain);
+    r = bf_cgen_new(&cgen, ctx, &chain);
     if (r)
         return r;
 
@@ -430,7 +430,7 @@ int _bf_cli_chain_load(bf_ctx_t *ctx, const struct bf_request *request,
                         chain->name);
     }
 
-    r = bf_cgen_new(&cgen, &chain);
+    r = bf_cgen_new(&cgen, ctx, &chain);
     if (r)
         return r;
 

@@ -48,7 +48,7 @@ static int _bf_handle_get_fd(const char *name)
 
     assert(name);
 
-    bf_fd = bf_ctx_get_pindir_fd();
+    bf_fd = bf_ctx_get_pindir_fd(global_ctx);
     if (bf_fd < 0)
         return bf_fd;
 
@@ -246,7 +246,7 @@ void bf_handle_free(struct bf_handle **handle)
     if (!*handle)
         return;
 
-    unlinkat(bf_ctx_get_pindir_fd(), (*handle)->name, AT_REMOVEDIR);
+    unlinkat(bf_ctx_get_pindir_fd(global_ctx), (*handle)->name, AT_REMOVEDIR);
     freep((void *)&(*handle)->name);
     closep(&(*handle)->prog_fd);
 
@@ -417,7 +417,7 @@ void bf_handle_unpin(struct bf_handle *handle)
         bf_map_unpin(handle->xmap, dir_fd);
 
     unlinkat(dir_fd, _BF_PROG_NAME, 0);
-    unlinkat(bf_ctx_get_pindir_fd(), handle->name, AT_REMOVEDIR);
+    unlinkat(bf_ctx_get_pindir_fd(global_ctx), handle->name, AT_REMOVEDIR);
 }
 
 int bf_handle_get_counter(const struct bf_handle *handle, uint32_t counter_idx,
@@ -471,7 +471,7 @@ void bf_handle_detach(struct bf_handle *handle)
 }
 
 int bf_handle_persist_context(struct bf_handle *handle,
-                              const struct bf_chain *chain)
+                              const struct bf_chain *chain, int token_fd)
 {
     _free_bf_map_ struct bf_map *map = NULL;
     _free_bf_wpack_ bf_wpack_t *wpack = NULL;
@@ -511,7 +511,7 @@ int bf_handle_persist_context(struct bf_handle *handle,
     }
 
     r = bf_map_new(&handle->xmap, "ctx_map", BF_MAP_TYPE_CTX, sizeof(uint32_t),
-                   data_len, 1);
+                   data_len, 1, token_fd);
     if (r)
         return bf_err_r(r, "failed to create the ctx bf_map object");
 
