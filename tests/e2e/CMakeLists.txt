@@ -64,6 +64,7 @@ bf_add_e2e_test(e2e cli/ruleset.sh ROOT)
 
 bf_add_e2e_test(e2e daemon/already_running.sh ROOT)
 bf_add_e2e_test(e2e daemon/host_to_netns.sh ROOT)
+bf_add_e2e_test(e2e daemon/map_decl_tags.sh ROOT)
 bf_add_e2e_test(e2e daemon/netns_to_host.sh ROOT)
 bf_add_e2e_test(e2e daemon/pin_updated_chain.sh ROOT)
 bf_add_e2e_test(e2e daemon/restore_attached.sh ROOT)
