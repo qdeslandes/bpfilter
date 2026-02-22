@@ -6,6 +6,7 @@
 #include "cgen/prog/map.h"
 
 #include <linux/bpf.h>
+#include <linux/btf.h>
 
 #include <bpf/btf.h>
 #include <errno.h>
@@ -256,54 +257,123 @@ int bf_map_new_from_set(struct bf_map **map, const char *name,
                        set->elem_size, 1, bf_list_size(&set->elems));
 }
 
-int bf_map_new_from_pack(struct bf_map **map, int dir_fd, bf_rpack_node_t node)
+#define _free_btf_ __attribute__((__cleanup__(_bf_btf_free_wrapper)))
+
+static void _bf_btf_free_wrapper(struct btf **btf)
+{
+    assert(btf);
+
+    if (*btf) {
+        btf__free(*btf);
+        *btf = NULL;
+    }
+}
+
+/**
+ * @brief Get the `bf_map` type from a map's BTF data.
+ *
+ * Retrieve the BTF data associated with the given BTF ID, parse it,
+ * and look for a `BTF_KIND_DECL_TAG` whose value matches a known
+ * `bf_map_type` string.
+ *
+ * @param btf_id BTF ID associated with the map. Must be non-zero.
+ * @param type On success, set to the corresponding `bf_map_type`. Can't
+ *        be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_map_type_from_btf(uint32_t btf_id, enum bf_map_type *type)
+{
+    _cleanup_close_ int btf_fd = -1;
+    _cleanup_free_ void *data = NULL;
+    _free_btf_ struct btf *btf = NULL;
+    struct bpf_btf_info btf_info = {};
+    int r;
+
+    assert(btf_id);
+    assert(type);
+
+    btf_fd = bf_bpf_btf_get_fd_by_id(btf_id);
+    if (btf_fd < 0)
+        return bf_err_r(btf_fd, "failed to get BTF fd for ID %u", btf_id);
+
+    r = bf_bpf_obj_get_info(btf_fd, &btf_info, sizeof(btf_info));
+    if (r)
+        return bf_err_r(r, "failed to query BTF info size for ID %u", btf_id);
+
+    if (btf_info.btf_size == 0)
+        return bf_err_r(-ENODATA, "BTF data is empty for ID %u", btf_id);
+
+    data = malloc(btf_info.btf_size);
+    if (!data)
+        return -ENOMEM;
+
+    btf_info.btf = bf_ptr_to_u64(data);
+
+    r = bf_bpf_obj_get_info(btf_fd, &btf_info, sizeof(btf_info));
+    if (r)
+        return bf_err_r(r, "failed to retrieve BTF data for ID %u", btf_id);
+
+    btf = btf__new(data, btf_info.btf_size);
+    if (!btf)
+        return bf_err_r(-errno, "failed to parse BTF data for ID %u", btf_id);
+
+    for (uint32_t i = 1; i < btf__type_cnt(btf); ++i) {
+        const struct btf_type *btf_type = btf__type_by_id(btf, i);
+
+        if (BTF_INFO_KIND(btf_type->info) != BTF_KIND_DECL_TAG)
+            continue;
+
+        r = _bf_map_type_from_str(btf__name_by_offset(btf, btf_type->name_off),
+                                  type);
+        if (r == 0)
+            return 0;
+    }
+
+    return bf_err_r(
+        -ENOENT, "no bf_map type decl tag found in BTF data for ID %u", btf_id);
+}
+
+int bf_map_new_from_fd(struct bf_map **map, int fd)
 {
     _free_bf_map_ struct bf_map *_map = NULL;
-    _cleanup_free_ char *name = NULL;
+    struct bpf_map_info info = {};
     int r;
 
     assert(map);
 
-    if (dir_fd < 0)
-        return bf_err_r(-EBADFD, "dir_fd is invalid");
+    if (fd < 0)
+        return bf_err_r(-EBADFD, "invalid BPF map file descriptor");
+
+    r = bf_bpf_obj_get_info(fd, &info, sizeof(info));
+    if (r)
+        return bf_err_r(r, "failed to get BPF map info from fd %d", fd);
 
     _map = malloc(sizeof(*_map));
     if (!_map)
         return -ENOMEM;
 
-    r = bf_rpack_kv_str(node, "name", &name);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.name");
-    if (strlen(name) == 0)
-        return bf_err_r(-EINVAL, "map name can't be empty");
-    bf_strncpy(_map->name, BPF_OBJ_NAME_LEN, name);
+    bf_strncpy(_map->name, BPF_OBJ_NAME_LEN, info.name);
+    _map->bpf_type = info.type;
+    _map->key_size = info.key_size;
+    _map->value_size = info.value_size;
+    _map->n_elems = info.max_entries;
 
-    r = bf_rpack_kv_enum(node, "type", &_map->type, 0, _BF_MAP_TYPE_MAX);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.type");
+    _map->fd = dup(fd);
+    if (_map->fd < 0)
+        return bf_err_r(-errno, "failed to duplicate map fd %d", fd);
 
-    r = bf_rpack_kv_enum(node, "bpf_type", &_map->bpf_type, 0,
-                         __MAX_BPF_MAP_TYPE);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.bpf_type");
-
-    r = bf_rpack_kv_u64(node, "key_size", &_map->key_size);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.key_size");
-
-    r = bf_rpack_kv_u64(node, "value_size", &_map->value_size);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.value_size");
-
-    r = bf_rpack_kv_u64(node, "n_elems", &_map->n_elems);
-    if (r)
-        return bf_rpack_key_err(r, "bf_map.n_elems");
-    if (_map->n_elems == 0)
-        return bf_err_r(-EINVAL, "bf_map should not have 0 elements");
-
-    r = bf_bpf_obj_get(_map->name, dir_fd, &_map->fd);
-    if (r < 0)
-        return bf_err_r(r, "failed to open pinned BPF map '%s'", _map->name);
+    if (info.btf_id) {
+        r = _bf_map_type_from_btf(info.btf_id, &_map->type);
+        if (r)
+            return r;
+    } else if (info.type == BF_BPF_MAP_TYPE_RINGBUF) {
+        _map->type = BF_MAP_TYPE_LOG;
+    } else {
+        return bf_err_r(
+            -ENOTSUP,
+            "BPF map '%s' has no BTF data, can't determine bf_map type",
+            info.name);
+    }
 
     *map = TAKE_PTR(_map);
 
