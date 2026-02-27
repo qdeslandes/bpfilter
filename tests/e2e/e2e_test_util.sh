@@ -178,6 +178,21 @@ trap 'cleanup 1; exit 1' INT TERM
 #
 ################################################################################
 
+read_counter() {
+    local chain="" rule_id=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --chain) chain="$2"; shift 2 ;;
+            --rule-id) rule_id="$2"; shift 2 ;;
+        esac
+    done
+
+    ${FROM_NS} bpftool -j map dump pinned \
+        ${WORKDIR}/bpf/bpfilter/${chain}/bf_cmap \
+        | jq ".[] | select(.formatted.key == ${rule_id}) | .formatted.value.count"
+}
+
 WITH_TIMEOUT="timeout --signal INT --preserve-status .5"
 
 cleanup
