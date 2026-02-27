@@ -340,7 +340,11 @@ With:
     - ``BF_HOOK_NF_LOCAL_OUT``: similar to ``nftables`` and ``iptables`` output hook.
     - ``BF_HOOK_NF_POST_ROUTING``: similar to ``nftables`` and ``iptables`` postrouting hook.
     - ``BF_HOOK_TC_EGRESS``: egress TC hook.
-  - ``$POLICY``: action taken if no rule matches the packet, either ``ACCEPT`` forward the packet to the kernel, or ``DROP`` to discard it. Note while ``CONTINUE`` is a valid verdict for rules, it is not supported for chain policy.
+  - ``$POLICY``: action taken if no rule matches the packet:
+
+    - ``ACCEPT``: forward the packet to the kernel.
+    - ``DROP``: discard the packet.
+    - ``CONTINUE``: defer to the next BPF program in the hook chain. For TC hooks, returns ``TCX_NEXT`` so the next TC program decides. For Netfilter hooks, equivalent to ``ACCEPT`` (``NF_DROP`` from a subsequent program still stops the chain). For cgroup hooks, equivalent to ``ACCEPT`` (the kernel runs all attached programs and combines their results). Not supported for XDP hooks.
 
 ``$OPTIONS`` are hook-specific comma separated key value pairs. A given hook option can only be specified once:
 
