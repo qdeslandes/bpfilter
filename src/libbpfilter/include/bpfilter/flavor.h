@@ -107,16 +107,14 @@ struct bf_flavor_ops
                                enum bf_redirect_dir dir);
 
     /**
-     * Generates a flavor-specific return code corresponding to the verdict.
+     * @brief Convert a bpfilter verdict into a flavor-specific BPF return code.
      *
-     * Note this function only needs to handle terminal verdicts - verdicts that
-     * stop further packet processing. Non-terminal verdicts do not need return
-     * codes and therefore do not need to be handled by get_verdict().
-     *
-     * @return Flavor-specific verdict for `verdict`, or a negative errno
-     * value on failure.
+     * @param verdict Verdict to convert. Must be valid.
+     * @param bpf_ret Pointer to store the BPF return code. Can't be NULL.
+     * @return 0 on success, or a negative errno value on failure. Returns
+     *         -ENOTSUP if the verdict is not supported by this flavor.
      */
-    int (*get_verdict)(enum bf_verdict verdict);
+    int (*get_verdict)(enum bf_verdict verdict, int *bpf_ret);
 };
 
 /**

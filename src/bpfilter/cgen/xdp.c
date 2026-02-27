@@ -106,13 +106,24 @@ static int _bf_xdp_gen_inline_redirect(struct bf_program *program,
     return 0;
 }
 
-static int _bf_xdp_get_verdict(enum bf_verdict verdict)
+/**
+ * @brief Convert a standard verdict into an XDP return value.
+ *
+ * @param verdict Verdict to convert. Must be valid.
+ * @param bpf_ret Pointer to store the XDP return code. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_xdp_get_verdict(enum bf_verdict verdict, int *bpf_ret)
 {
+    assert(bpf_ret);
+
     switch (verdict) {
     case BF_VERDICT_ACCEPT:
-        return XDP_PASS;
+        *bpf_ret = XDP_PASS;
+        return 0;
     case BF_VERDICT_DROP:
-        return XDP_DROP;
+        *bpf_ret = XDP_DROP;
+        return 0;
     default:
         return -ENOTSUP;
     }

@@ -20,10 +20,14 @@
  *  {
  *      _clean_bf_jmpctx_ struct bf_jmpctx ctx =
  *          bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 0, 0));
+ *      int bpf_ret;
+ *      int r;
  *
- *      EMIT(program,
- *          BPF_MOV64_IMM(BPF_REG_0, program->runtime.ops->get_verdict(
- *              BF_VERDICT_ACCEPT)));
+ *      r = program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT, &bpf_ret);
+ *      if (r)
+ *          return bf_err_r(r, "failed to get verdict");
+ *
+ *      EMIT(program, BPF_MOV64_IMM(BPF_REG_0, bpf_ret));
  *      EMIT(program, BPF_EXIT_INSN());
  *  }
  * @endcode

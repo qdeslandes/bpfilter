@@ -132,17 +132,22 @@ static int _bf_cgroup_gen_inline_get_skb(struct bf_program *program, int reg)
 }
 
 /**
- * Convert a standard verdict into a return value.
+ * @brief Convert a standard verdict into a cgroup return value.
  *
  * @param verdict Verdict to convert. Must be valid.
- * @return TC return code corresponding to the verdict, as an integer.
+ * @param bpf_ret Pointer to store the cgroup return code. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
  */
-static int _bf_cgroup_get_verdict(enum bf_verdict verdict)
+static int _bf_cgroup_get_verdict(enum bf_verdict verdict, int *bpf_ret)
 {
+    assert(bpf_ret);
+
     switch (verdict) {
     case BF_VERDICT_ACCEPT:
-        return 1;
+        *bpf_ret = 1;
+        return 0;
     case BF_VERDICT_DROP:
+        *bpf_ret = 0;
         return 0;
     default:
         return -ENOTSUP;
