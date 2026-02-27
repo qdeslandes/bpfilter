@@ -151,6 +151,58 @@ static void get_set_by_name(void **state)
     assert_null(bf_chain_get_set_by_name(chain, "bft_set_missing"));
 }
 
+static void continue_as_policy(void **state)
+{
+    _free_bf_chain_ struct bf_chain *chain = NULL;
+
+    (void)state;
+
+    assert_ok(bf_chain_new(&chain, "tc", BF_HOOK_TC_EGRESS, BF_VERDICT_CONTINUE,
+                           NULL, NULL));
+    assert_int_equal(chain->policy, BF_VERDICT_CONTINUE);
+    bf_chain_free(&chain);
+
+    assert_ok(bf_chain_new(&chain, "nf", BF_HOOK_NF_LOCAL_IN,
+                           BF_VERDICT_CONTINUE, NULL, NULL));
+    assert_int_equal(chain->policy, BF_VERDICT_CONTINUE);
+    bf_chain_free(&chain);
+
+    assert_ok(bf_chain_new(&chain, "cg", BF_HOOK_CGROUP_INGRESS,
+                           BF_VERDICT_CONTINUE, NULL, NULL));
+    assert_int_equal(chain->policy, BF_VERDICT_CONTINUE);
+    bf_chain_free(&chain);
+
+    // CONTINUE is accepted at chain creation for XDP too; the rejection
+    // happens at codegen time, not at chain creation.
+    assert_ok(bf_chain_new(&chain, "xdp", BF_HOOK_XDP, BF_VERDICT_CONTINUE,
+                           NULL, NULL));
+    assert_int_equal(chain->policy, BF_VERDICT_CONTINUE);
+}
+
+static void pack_unpack_continue_policy(void **state)
+{
+    _free_bf_chain_ struct bf_chain *chain0 = NULL;
+    _free_bf_chain_ struct bf_chain *chain1 = NULL;
+    _free_bf_wpack_ bf_wpack_t *wpack = NULL;
+    _free_bf_rpack_ bf_rpack_t *rpack = NULL;
+    const void *data;
+    size_t data_len;
+
+    (void)state;
+
+    assert_ok(bf_chain_new(&chain0, "tc", BF_HOOK_TC_EGRESS,
+                           BF_VERDICT_CONTINUE, NULL, NULL));
+
+    assert_ok(bf_wpack_new(&wpack));
+    assert_ok(bf_chain_pack(chain0, wpack));
+    assert_ok(bf_wpack_get_data(wpack, &data, &data_len));
+
+    assert_ok(bf_rpack_new(&rpack, data, data_len));
+    assert_ok(bf_chain_new_from_pack(&chain1, bf_rpack_root(rpack)));
+
+    assert_int_equal(chain1->policy, BF_VERDICT_CONTINUE);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -160,6 +212,8 @@ int main(void)
         cmocka_unit_test(get_set_from_matcher),
         cmocka_unit_test(mixed_enabled_disabled_log_flag),
         cmocka_unit_test(get_set_by_name),
+        cmocka_unit_test(continue_as_policy),
+        cmocka_unit_test(pack_unpack_continue_policy),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -36,17 +36,19 @@ int bf_redirect_dir_from_str(const char *str, enum bf_redirect_dir *dir);
 
 /**
  * Verdict to apply for a rule or chain.
- * Chains can only use terminal verdicts, rules can use all verdicts.
+ *
+ * Rules can use all verdicts. Chain policies can use ACCEPT, DROP, and
+ * CONTINUE. CONTINUE as a chain policy defers to the next BPF program:
+ * TC returns TCX_NEXT, NF and cgroup return ACCEPT. Not supported for XDP.
  */
 enum bf_verdict
 {
-    /** Terminal verdicts that stop further packet processing. */
     /** Accept the packet. */
     BF_VERDICT_ACCEPT,
     /** Drop the packet. */
     BF_VERDICT_DROP,
-    /** Non-terminal verdicts that allow further packet processing. */
-    /** Continue processing the next rule. */
+    /** As a rule verdict, continue processing the next rule. As a chain
+     * policy, defer to the next BPF program. */
     BF_VERDICT_CONTINUE,
     /** Redirect the packet to another interface. */
     BF_VERDICT_REDIRECT,

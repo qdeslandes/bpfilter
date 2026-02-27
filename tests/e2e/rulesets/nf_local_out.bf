@@ -240,3 +240,5 @@ chain nf_local_out BF_HOOK_NF_LOCAL_OUT ACCEPT
         }
         counter
         ACCEPT
+
+chain nf_local_out_continue BF_HOOK_NF_LOCAL_OUT CONTINUE

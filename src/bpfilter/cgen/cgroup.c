@@ -149,6 +149,9 @@ static int _bf_cgroup_get_verdict(enum bf_verdict verdict, int *bpf_ret)
     case BF_VERDICT_DROP:
         *bpf_ret = 0;
         return 0;
+    case BF_VERDICT_CONTINUE:
+        *bpf_ret = 1;
+        return 0;
     default:
         return -ENOTSUP;
     }

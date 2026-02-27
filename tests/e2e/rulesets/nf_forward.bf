@@ -240,3 +240,5 @@ chain nf_forward BF_HOOK_NF_FORWARD ACCEPT
         }
         counter
         ACCEPT
+
+chain nf_forward_continue BF_HOOK_NF_FORWARD CONTINUE

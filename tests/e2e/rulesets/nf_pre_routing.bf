@@ -240,3 +240,5 @@ chain nf_pre_routing BF_HOOK_NF_PRE_ROUTING ACCEPT
         }
         counter
         ACCEPT
+
+chain nf_pre_routing_continue BF_HOOK_NF_PRE_ROUTING CONTINUE

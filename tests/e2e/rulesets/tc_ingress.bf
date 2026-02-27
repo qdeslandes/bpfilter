@@ -262,3 +262,5 @@ chain tc_ingress BF_HOOK_TC_INGRESS ACCEPT
     rule
         meta.l4_proto tcp
         REDIRECT lo in
+
+chain tc_ingress_continue BF_HOOK_TC_INGRESS CONTINUE

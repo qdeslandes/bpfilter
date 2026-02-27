@@ -169,6 +169,9 @@ static int _bf_nf_get_verdict(enum bf_verdict verdict, int *bpf_ret)
     case BF_VERDICT_DROP:
         *bpf_ret = NF_DROP;
         return 0;
+    case BF_VERDICT_CONTINUE:
+        *bpf_ret = NF_ACCEPT;
+        return 0;
     default:
         return -ENOTSUP;
     }

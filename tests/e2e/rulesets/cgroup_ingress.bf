@@ -242,3 +242,5 @@ chain cgroup_ingress BF_HOOK_CGROUP_INGRESS ACCEPT
         }
         counter
         ACCEPT
+
+chain cgroup_ingress_continue BF_HOOK_CGROUP_INGRESS CONTINUE

@@ -6,5 +6,5 @@ make_sandbox
 start_bpfilter
 
 for file in "$(dirname -- "$0";)"/*.bf; do
-    ${FROM_NS} bfcli chain set --from-file ${file}
+    ${FROM_NS} bfcli ruleset set --from-file ${file}
 done

@@ -240,3 +240,5 @@ chain nf_local_in BF_HOOK_NF_LOCAL_IN ACCEPT
         }
         counter
         ACCEPT
+
+chain nf_local_in_continue BF_HOOK_NF_LOCAL_IN CONTINUE

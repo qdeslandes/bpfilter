@@ -240,3 +240,5 @@ chain nf_post_routing BF_HOOK_NF_POST_ROUTING ACCEPT
         }
         counter
         ACCEPT
+
+chain nf_post_routing_continue BF_HOOK_NF_POST_ROUTING CONTINUE
