@@ -250,6 +250,11 @@ Avoid:
 Doxygen documentation
 ^^^^^^^^^^^^^^^^^^^^^
 
+Documentation comments should use Doxygen-style delimiters to ensure they are picked up by the documentation generator:
+
+- Block documentation: ``/** */`` (double asterisk), not ``/* */``
+- Inline documentation: ``///`` (triple slash), not ``//``
+
 Not every function needs documentation. Skip documentation for trivial getters/setters. Document functions when:
 
 - Behavior needs explanation
@@ -260,8 +265,8 @@ For documented functions:
 
 - First line is a brief description with ``@brief`` tag
 - Use ``@param`` for parameters, ``@return`` for return values
-- Use backticks to reference function, variable, and parameter names
-- Use ``@code{.c}`` for examples
+- Always use backticks to reference function, variable, and parameter names, instead of ``@ref``, ``@p``...
+- Use ``@code{.c}`` / ``@endcode`` for code examples
 
 .. code:: c
 
@@ -278,13 +283,28 @@ For documented functions:
      */
     int bf_chain_new(struct bf_chain **chain, enum bf_chain_type type);
 
-For Doxygen comments specifically, the first and last lines of multi-line documentation should be empty (unlike regular multi-line comments).
+For Doxygen block comments, the first and last lines should be empty (unlike regular multi-line comments).
 
+File-level documentation
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use ``@file`` at the top of a file to provide module-level documentation:
+
+.. code:: c
+
+    /**
+     * @file ctx.h
+     *
+     * Global runtime context for @c bpfilter daemon.
+     *
+     * This file contains the definition of the @ref bf_ctx structure, which is
+     * the main structure used to store the daemon's runtime context.
+     */
 
 Structs
 -------
 
-Document struct purpose in the header. Use inline Doxygen comments for non-obvious fields:
+Document struct purpose in a ``/** */`` block. Use inline ``///`` comments for non-obvious fields:
 
 .. code:: c
 
