@@ -13,11 +13,13 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <bpfilter/helper.h>
 #include <bpfilter/logger.h>
 #include <bpfilter/matcher.h>
 
+#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/matcher/meta.h"
 #include "cgen/matcher/set.h"
@@ -296,6 +298,84 @@ static int _bf_matcher_pkt_generate_ip6_dscp(struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Progressive 32-bit load-and-compare for 128-bit IPv6 address matching.
+ *
+ * Instead of loading all 128 bits before any comparison, this function
+ * interleaves loads and compares: load 32 bits → compare → bail or load next
+ * 32 bits → compare → …. For EQ, a non-matching packet bails out after just
+ * 2 instructions (1 W load + 1 JMP32_IMM) vs. 5 with the generic path.
+ *
+ * For NE, all four 32-bit jump contexts land after the unconditional
+ * jump-to-next-rule, so a single differing chunk is sufficient to pass.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param matcher Matcher to generate bytecode for. Can't be NULL.
+ * @param meta Matcher metadata describing field offset. Can't be NULL.
+ * @return 0 on success, negative errno on error.
+ */
+static int _bf_matcher_pkt_cmp_addr128(struct bf_program *program,
+                                       const struct bf_matcher *matcher,
+                                       const struct bf_matcher_meta *meta)
+{
+    const uint8_t *ref = bf_matcher_payload(matcher);
+    enum bf_matcher_op op = bf_matcher_get_op(matcher);
+    int r;
+
+    r = bf_stub_load_header(program, meta, BPF_REG_6);
+    if (r)
+        return r;
+
+    if (op == BF_MATCHER_EQ) {
+        for (int i = 0; i < 4; i++) {
+            uint32_t chunk;
+
+            memcpy(&chunk, ref + i * 4, sizeof(chunk));
+            EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                      meta->hdr_payload_offset + i * 4));
+            EMIT_FIXUP_JMP_NEXT_RULE(
+                program, BPF_JMP32_IMM(BPF_JNE, BPF_REG_1, chunk, 0));
+        }
+    } else if (op == BF_MATCHER_NE) {
+        _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_default();
+        _clean_bf_jmpctx_ struct bf_jmpctx j1 = bf_jmpctx_default();
+        _clean_bf_jmpctx_ struct bf_jmpctx j2 = bf_jmpctx_default();
+        _clean_bf_jmpctx_ struct bf_jmpctx j3 = bf_jmpctx_default();
+        uint32_t chunk;
+
+        memcpy(&chunk, ref, sizeof(chunk));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  meta->hdr_payload_offset));
+        j0 =
+            bf_jmpctx_get(program, BPF_JMP32_IMM(BPF_JNE, BPF_REG_1, chunk, 0));
+
+        memcpy(&chunk, ref + 4, sizeof(chunk));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  meta->hdr_payload_offset + 4));
+        j1 =
+            bf_jmpctx_get(program, BPF_JMP32_IMM(BPF_JNE, BPF_REG_1, chunk, 0));
+
+        memcpy(&chunk, ref + 8, sizeof(chunk));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  meta->hdr_payload_offset + 8));
+        j2 =
+            bf_jmpctx_get(program, BPF_JMP32_IMM(BPF_JNE, BPF_REG_1, chunk, 0));
+
+        memcpy(&chunk, ref + 12, sizeof(chunk));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  meta->hdr_payload_offset + 12));
+        j3 =
+            bf_jmpctx_get(program, BPF_JMP32_IMM(BPF_JNE, BPF_REG_1, chunk, 0));
+
+        EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_A(0));
+    } else {
+        return bf_err_r(-EINVAL,
+                        "unsupported operator %d for IPv6 address matcher", op);
+    }
+
+    return 0;
+}
+
 int bf_matcher_generate_packet(struct bf_program *program,
                                const struct bf_matcher *matcher)
 {
@@ -332,6 +412,9 @@ int bf_matcher_generate_packet(struct bf_program *program,
     case BF_MATCHER_ICMPV6_TYPE:
     case BF_MATCHER_ICMPV6_CODE:
         return _bf_matcher_pkt_load_and_cmp(program, matcher, meta);
+    case BF_MATCHER_IP6_SADDR:
+    case BF_MATCHER_IP6_DADDR:
+        return _bf_matcher_pkt_cmp_addr128(program, matcher, meta);
     case BF_MATCHER_IP4_SNET:
     case BF_MATCHER_IP4_DNET:
     case BF_MATCHER_IP6_SNET:
