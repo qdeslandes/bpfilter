@@ -29,25 +29,22 @@ static inline uint64_t _bf_read_u64(const void *ptr)
 }
 
 /**
- * @brief Emit a 4-instruction sequence to build a 64-bit immediate from 8 bytes.
+ * @brief Emit a 2-slot wide instruction to load a 64-bit immediate into a register.
  *
- * Produces:
- * @code
- * MOV32_IMM(dst, high32) -> LSH(dst, 32) -> MOV32_IMM(scratch, low32) -> OR(dst, scratch)
- * @endcode
+ * Uses the canonical BPF_LD_IMM64 wide instruction which JIT-compiles to a
+ * single `movabs` on x86_64, avoiding the need for a scratch register.
  *
  * @param program Program to emit into. Can't be NULL.
  * @param dst_reg Destination register for the 64-bit value.
- * @param scratch_reg Scratch register (clobbered).
  * @param data 64-bit value to load.
  */
 static int _bf_cmp_build_imm64(struct bf_program *program, int dst_reg,
-                               int scratch_reg, uint64_t data)
+                               uint64_t data)
 {
-    EMIT(program, BPF_MOV32_IMM(dst_reg, (uint32_t)(data >> 32)));
-    EMIT(program, BPF_ALU64_IMM(BPF_LSH, dst_reg, 32));
-    EMIT(program, BPF_MOV32_IMM(scratch_reg, (uint32_t)data));
-    EMIT(program, BPF_ALU64_REG(BPF_OR, dst_reg, scratch_reg));
+    struct bpf_insn ld64[2] = {BPF_LD_IMM64(dst_reg, data)};
+
+    EMIT(program, ld64[0]);
+    EMIT(program, ld64[1]);
 
     return 0;
 }
@@ -109,8 +106,7 @@ int bf_cmp_value(struct bf_program *program, enum bf_matcher_op op,
          * then compare with `JMP_REG`. */
         int r;
 
-        r = _bf_cmp_build_imm64(program, BPF_REG_2, BPF_REG_3,
-                                _bf_read_u64(ref));
+        r = _bf_cmp_build_imm64(program, BPF_REG_2, _bf_read_u64(ref));
         if (r)
             return r;
         EMIT_FIXUP_JMP_NEXT_RULE(
@@ -124,8 +120,7 @@ int bf_cmp_value(struct bf_program *program, enum bf_matcher_op op,
         const uint8_t *addr = ref;
         int r;
 
-        r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                _bf_read_u64(addr));
+        r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(addr));
         if (r)
             return r;
 
@@ -133,8 +128,7 @@ int bf_cmp_value(struct bf_program *program, enum bf_matcher_op op,
             EMIT_FIXUP_JMP_NEXT_RULE(program,
                                      BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
 
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                    _bf_read_u64(addr + 8));
+            r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(addr + 8));
             if (r)
                 return r;
             EMIT_FIXUP_JMP_NEXT_RULE(
@@ -152,8 +146,7 @@ int bf_cmp_value(struct bf_program *program, enum bf_matcher_op op,
             j0 =
                 bf_jmpctx_get(program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
 
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                    _bf_read_u64(addr + 8));
+            r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(addr + 8));
             if (r)
                 return r;
             j1 = bf_jmpctx_get(program,
@@ -210,14 +203,12 @@ int bf_cmp_masked_value(struct bf_program *program, enum bf_matcher_op op,
 
         // Apply mask to loaded reg/reg+1 if not a full /128
         if (mask[_BF_MASK_LAST_BYTE] != (uint8_t)~0) {
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                    _bf_read_u64(mask));
+            r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(mask));
             if (r)
                 return r;
             EMIT(program, BPF_ALU64_REG(BPF_AND, reg, BPF_REG_3));
 
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                    _bf_read_u64(mask + 8));
+            r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(mask + 8));
             if (r)
                 return r;
             EMIT(program, BPF_ALU64_REG(BPF_AND, reg + 1, BPF_REG_3));
@@ -228,8 +219,7 @@ int bf_cmp_masked_value(struct bf_program *program, enum bf_matcher_op op,
         for (int i = 0; i < 8; i++)
             masked_hi[i] = addr[i + 8] & mask[i + 8];
 
-        r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
-                                _bf_read_u64(masked_lo));
+        r = _bf_cmp_build_imm64(program, BPF_REG_3, _bf_read_u64(masked_lo));
         if (r)
             return r;
 
@@ -237,7 +227,7 @@ int bf_cmp_masked_value(struct bf_program *program, enum bf_matcher_op op,
             EMIT_FIXUP_JMP_NEXT_RULE(program,
                                      BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
 
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
+            r = _bf_cmp_build_imm64(program, BPF_REG_3,
                                     _bf_read_u64(masked_hi));
             if (r)
                 return r;
@@ -250,7 +240,7 @@ int bf_cmp_masked_value(struct bf_program *program, enum bf_matcher_op op,
             j0 =
                 bf_jmpctx_get(program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
 
-            r = _bf_cmp_build_imm64(program, BPF_REG_3, BPF_REG_4,
+            r = _bf_cmp_build_imm64(program, BPF_REG_3,
                                     _bf_read_u64(masked_hi));
             if (r)
                 return r;
