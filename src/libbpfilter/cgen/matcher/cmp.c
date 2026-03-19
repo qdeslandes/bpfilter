@@ -94,14 +94,14 @@ int bf_cmp_value(struct bf_program *program, enum bf_matcher_op op,
         break;
     }
     case 4: {
-        /* 32-bit values: may exceed signed 32-bit immediate range, so
-         * use MOV32_IMM into R2 + JMP_REG. */
+        /* 32-bit values: use BPF_JMP32_IMM for a single-instruction
+         * register-immediate compare (bitwise, so uint32_t bit patterns
+         * are preserved despite the signed immediate field). */
         uint32_t val = *(const uint32_t *)ref;
 
-        EMIT(program, BPF_MOV32_IMM(BPF_REG_2, val));
         EMIT_FIXUP_JMP_NEXT_RULE(
-            program, BPF_JMP_REG(op == BF_MATCHER_EQ ? BPF_JNE : BPF_JEQ, reg,
-                                 BPF_REG_2, 0));
+            program, BPF_JMP32_IMM(op == BF_MATCHER_EQ ? BPF_JNE : BPF_JEQ, reg,
+                                   val, 0));
         break;
     }
     case 8: {
@@ -187,17 +187,17 @@ int bf_cmp_masked_value(struct bf_program *program, enum bf_matcher_op op,
 
         _bf_prefix_to_mask(prefixlen, (uint8_t *)&mask, 4);
 
-        EMIT(program, BPF_MOV32_IMM(BPF_REG_2, *addr));
+        /* Pre-compute the masked reference value at code-generation time
+         * to avoid redundant runtime AND. For a full /32 prefix the AND
+         * instruction is skipped entirely. */
+        uint32_t masked_val = *addr & mask;
 
-        if (mask != ~0U) {
-            EMIT(program, BPF_MOV32_IMM(BPF_REG_3, mask));
-            EMIT(program, BPF_ALU32_REG(BPF_AND, reg, BPF_REG_3));
-            EMIT(program, BPF_ALU32_REG(BPF_AND, BPF_REG_2, BPF_REG_3));
-        }
+        if (mask != ~0U)
+            EMIT(program, BPF_ALU32_IMM(BPF_AND, reg, mask));
 
         EMIT_FIXUP_JMP_NEXT_RULE(
-            program, BPF_JMP_REG(op == BF_MATCHER_EQ ? BPF_JNE : BPF_JEQ, reg,
-                                 BPF_REG_2, 0));
+            program, BPF_JMP32_IMM(op == BF_MATCHER_EQ ? BPF_JNE : BPF_JEQ, reg,
+                                   masked_val, 0));
         break;
     }
     case 16: {
