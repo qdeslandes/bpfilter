@@ -283,6 +283,79 @@ static int _bf_program_fixup(struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Check whether any matcher in the chain requires L4 header parsing.
+ *
+ * Iterates over all (non-disabled) rules and their matchers. Returns true as
+ * soon as it finds a matcher that dereferences the L4 header slice populated
+ * by @ref bf_stub_parse_l4_hdr . This includes:
+ * - Explicit L4 packet matchers (TCP/UDP/ICMP/ICMPv6 fields).
+ * - Meta port matchers (@c meta.sport / @c meta.dport ) which load from
+ *   @c l4_hdr at runtime.
+ * - Flow-probability matchers whose elfstub dereferences @c l4_hdr for TCP
+ *   and UDP ports.
+ * - Set matchers whose key contains at least one L4-layer component.
+ *
+ * @param program Program to inspect. Can't be NULL.
+ * @return true if L4 parsing is required, false otherwise.
+ */
+static bool _bf_program_needs_l4_header(const struct bf_program *program)
+{
+    const struct bf_chain *chain = program->runtime.chain;
+
+    assert(program);
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+            enum bf_matcher_type type = bf_matcher_get_type(matcher);
+
+            if (type == BF_MATCHER_SET) {
+                const struct bf_set *set =
+                    bf_chain_get_set_for_matcher(chain, matcher);
+
+                if (!set)
+                    continue;
+
+                for (size_t i = 0; i < set->n_comps; ++i) {
+                    const struct bf_matcher_meta *meta =
+                        bf_matcher_get_meta(set->key[i]);
+
+                    if (meta && meta->layer == BF_MATCHER_LAYER_4)
+                        return true;
+                }
+                continue;
+            }
+
+            switch (type) {
+            case BF_MATCHER_TCP_SPORT:
+            case BF_MATCHER_TCP_DPORT:
+            case BF_MATCHER_TCP_FLAGS:
+            case BF_MATCHER_UDP_SPORT:
+            case BF_MATCHER_UDP_DPORT:
+            case BF_MATCHER_ICMP_TYPE:
+            case BF_MATCHER_ICMP_CODE:
+            case BF_MATCHER_ICMPV6_TYPE:
+            case BF_MATCHER_ICMPV6_CODE:
+            case BF_MATCHER_META_SPORT:
+            case BF_MATCHER_META_DPORT:
+            case BF_MATCHER_META_FLOW_PROBABILITY:
+                return true;
+            default:
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
 static int _bf_program_generate_rule(struct bf_program *program,
                                      struct bf_rule *rule)
 {
@@ -598,6 +671,8 @@ int bf_program_generate(struct bf_program *program)
         EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_7,
                                   BF_PROG_CTX_OFF(ipv6_eh)));
     }
+
+    program->runtime.needs_l4 = _bf_program_needs_l4_header(program);
 
     r = program->runtime.ops->gen_inline_prologue(program);
     if (r)

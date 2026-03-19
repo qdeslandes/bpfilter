@@ -113,9 +113,11 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     if (r)
         return r;
 
-    r = bf_stub_parse_l4_hdr(program);
-    if (r)
-        return r;
+    if (program->runtime.needs_l4) {
+        r = bf_stub_parse_l4_hdr(program);
+        if (r)
+            return r;
+    }
 
     return 0;
 }

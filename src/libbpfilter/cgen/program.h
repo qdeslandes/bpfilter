@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -218,6 +219,12 @@ struct bf_program
         /** Chain the program is generated from. This is a non-owning pointer:
          * the @ref bf_program doesn't have to manage its lifetime. */
         const struct bf_chain *chain;
+
+        /** True if at least one rule matcher requires the L4 header to be
+         * parsed. When false, the prologue skips the @ref bf_stub_parse_l4_hdr
+         * call, saving ~25 BPF instructions per packet for chains that only
+         * match on L2/L3 fields or metadata. */
+        bool needs_l4;
     } runtime;
 };
 
