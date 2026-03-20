@@ -20,10 +20,10 @@
 #include <bpfilter/runtime.h>
 #include <bpfilter/verdict.h>
 
+#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/matcher/meta.h"
 #include "cgen/program.h"
-#include "cgen/swich.h"
 #include "filter.h"
 
 // Forward definition to avoid header conflicts.
@@ -31,8 +31,6 @@ uint16_t htons(uint16_t hostshort);
 
 static int _bf_cgroup_sock_addr_gen_inline_prologue(struct bf_program *program)
 {
-    int r;
-
     assert(program);
 
     /* `R6` = `bpf_sock_addr` context pointer. Unlike packet-based flavors where
@@ -42,24 +40,29 @@ static int _bf_cgroup_sock_addr_gen_inline_prologue(struct bf_program *program)
     // The counters stub reads `pkt_size` unconditionally; zero it out.
     EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
 
-    /* Convert `bpf_sock_addr.family` to L3 protocol ID in `R7`, using the same
-     * `bf_swich` pattern as cgroup_skb. */
+    /* Convert `bpf_sock_addr.family` to L3 protocol ID in `R7`, using the
+     * speculative-set-and-branch pattern. */
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_6,
                               offsetof(struct bpf_sock_addr, family)));
 
     {
-        _clean_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_2);
+        struct bf_jmpctx ipv4jmp, ipv6jmp;
 
-        EMIT_SWICH_OPTION(&swich, AF_INET,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        EMIT_SWICH_OPTION(&swich, AF_INET6,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
+        // Speculatively assume IPv4
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
+        ipv4jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET, 0));
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+        // Speculatively assume IPv6
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
+        ipv6jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET6, 0));
+
+        // Default: unknown family
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+
+        bf_jmpctx_cleanup(&ipv4jmp);
+        bf_jmpctx_cleanup(&ipv6jmp);
     }
 
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_8, BPF_REG_6,

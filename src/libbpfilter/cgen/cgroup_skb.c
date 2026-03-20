@@ -19,11 +19,11 @@
 #include <bpfilter/verdict.h>
 
 #include "cgen/cgen.h"
+#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/matcher/packet.h"
 #include "cgen/program.h"
 #include "cgen/stub.h"
-#include "cgen/swich.h"
 #include "filter.h"
 #include "linux/bpf.h"
 
@@ -67,18 +67,23 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
 
     {
-        _clean_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_2);
+        struct bf_jmpctx ipv4jmp, ipv6jmp;
 
-        EMIT_SWICH_OPTION(&swich, AF_INET,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        EMIT_SWICH_OPTION(&swich, AF_INET6,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
+        // Speculatively assume IPv4
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
+        ipv4jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET, 0));
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+        // Speculatively assume IPv6
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
+        ipv6jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET6, 0));
+
+        // Default: unknown family
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+
+        bf_jmpctx_cleanup(&ipv4jmp);
+        bf_jmpctx_cleanup(&ipv6jmp);
     }
 
     EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
