@@ -5,6 +5,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
+#include <linux/if_ether.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -14,6 +15,7 @@
 #include <bpfilter/logger.h>
 #include <bpfilter/verdict.h>
 
+#include "cgen/jmp.h"
 #include "cgen/matcher/packet.h"
 #include "cgen/program.h"
 #include "cgen/stub.h"
@@ -22,8 +24,10 @@
 /**
  * Generate XDP program prologue.
  *
- * @warning @ref bf_stub_parse_l2_ethhdr will check for L3 protocol. If L3 is
- * not IPv4, the program will be terminated.
+ * Read the ethertype directly from xdp_md->data via XDP direct packet access
+ * (with a bounds check) instead of calling bf_stub_parse_l2_ethhdr(), which
+ * would invoke bpf_dynptr_slice() just to extract 2 bytes. This saves one
+ * kfunc call and ~5 BPF instructions per packet on the fast path.
  *
  * @param program Program to generate the prologue for. Must not be NULL.
  * @return 0 on success, or negative errno value on error.
@@ -34,29 +38,58 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
-    // Calculate the packet size and store it into the runtime context
+    /* Load data and data_end pointers from xdp_md. R1 = ctx (xdp_md *). */
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
                               offsetof(struct xdp_md, data)));
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
                               offsetof(struct xdp_md, data_end)));
+
+    /* Bounds check: data + ETH_HLEN <= data_end; accept short/invalid frames.
+     * This replaces bf_stub_parse_l2_ethhdr(), which called bpf_dynptr_slice()
+     * just to read ethhdr.h_proto. R4 is a scratch register for the check.
+     * R7 is callee-saved and will hold the ethertype across the kfunc call. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_2));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN));
+    {
+        _clean_bf_jmpctx_ struct bf_jmpctx _ =
+            bf_jmpctx_get(program, BPF_JMP_REG(BPF_JLE, BPF_REG_4, BPF_REG_3, 0));
+
+        r = program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT);
+        if (r < 0)
+            return r;
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_0, r));
+        EMIT(program, BPF_EXIT_INSN());
+    }
+
+    /* Read ethertype directly via XDP packet access into R7. */
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_2,
+                              offsetof(struct ethhdr, h_proto)));
+
+    /* Compute pkt_size = data_end - data and store it into the runtime context. */
     EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_3, BPF_REG_2));
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
-    // Store the ingress ifindex into the runtime context
+    /* Set l3_offset = ETH_HLEN; zero l2_hdr and l2_size (no dynptr L2 slice). */
+    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
+                             sizeof(struct ethhdr)));
+    EMIT(program,
+         BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(l2_hdr), 0));
+    EMIT(program,
+         BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), 0));
+
+    /* Store the ingress ifindex into the runtime context. R1 still valid. */
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
                               offsetof(struct xdp_md, ingress_ifindex)));
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
+    /* Create the XDP dynptr. R1 still points to xdp_md. */
     r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
     if (r)
         return r;
 
-    r = bf_stub_parse_l2_ethhdr(program);
-    if (r)
-        return r;
-
+    /* Parse L3 (R7 already holds the ethertype) and optionally L4. */
     r = bf_stub_parse_l3_hdr(program);
     if (r)
         return r;
