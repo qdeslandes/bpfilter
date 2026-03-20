@@ -30,7 +30,7 @@
 #include "cgen/jmp.h"
 #include "cgen/printer.h"
 #include "cgen/program.h"
-#include "cgen/swich.h"
+#include "ctx.h"
 #include "filter.h"
 
 #define _BF_LOW_EH_BITMASK 0x1801800000000801ULL
@@ -168,18 +168,24 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
      * ID stored in r7. If the protocol is not supported, we store 0 into r7
      * and we skip the instructions below. */
     {
-        _clean_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_7);
+        struct bf_jmpctx ipv4jmp, ipv6jmp;
 
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
-        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
+        // Speculatively assume IPv4
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
+        ipv4jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IP), 0));
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+        // Speculatively assume IPv6
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
+        ipv6jmp = bf_jmpctx_get(
+            program,
+            BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
+
+        // Default: unsupported protocol
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+
+        bf_jmpctx_cleanup(&ipv4jmp);
+        bf_jmpctx_cleanup(&ipv6jmp);
     }
     _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
 
@@ -323,22 +329,35 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     /* Parse the L4 protocol and handle unuspported protocol, similarly to
      * bf_stub_parse_l3_hdr() above. */
     {
-        _clean_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_8);
+        struct bf_jmpctx tcpjmp, udpjmp, icmpjmp, icmpv6jmp;
 
-        EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMPV6,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
-        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
+        // Speculatively assume TCP
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
+        tcpjmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 0));
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+        // Speculatively assume UDP
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
+        udpjmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_UDP, 0));
+
+        // Speculatively assume ICMP
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
+        icmpjmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMP, 0));
+
+        // Speculatively assume ICMPv6
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
+        icmpv6jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMPV6, 0));
+
+        // Default: unsupported protocol
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+
+        bf_jmpctx_cleanup(&tcpjmp);
+        bf_jmpctx_cleanup(&udpjmp);
+        bf_jmpctx_cleanup(&icmpjmp);
+        bf_jmpctx_cleanup(&icmpv6jmp);
     }
     _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
