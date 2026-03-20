@@ -7,6 +7,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
+#include <linux/if_ether.h>
 #include <linux/pkt_cls.h>
 
 #include <stddef.h>
@@ -51,11 +52,17 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
-    r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
-    if (r)
-        return r;
+    /* Read the L3 protocol ID directly from the TC context and set l3_offset.
+     * This replaces bf_stub_parse_l2_ethhdr(), which would call
+     * bpf_dynptr_slice() just to read ethhdr.h_proto — a field that
+     * __sk_buff.protocol already exposes.  R1 still points to __sk_buff here;
+     * R7 is callee-saved so it survives the kfunc call below. */
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
+                              offsetof(struct __sk_buff, protocol)));
+    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
+                             sizeof(struct ethhdr)));
 
-    r = bf_stub_parse_l2_ethhdr(program);
+    r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)
         return r;
 
