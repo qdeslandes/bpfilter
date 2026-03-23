@@ -183,6 +183,7 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
 
         // Default: unsupported protocol
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
 
         bf_jmpctx_cleanup(&ipv4jmp);
         bf_jmpctx_cleanup(&ipv6jmp);

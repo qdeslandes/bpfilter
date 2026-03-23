@@ -655,10 +655,6 @@ int bf_program_generate(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
 
-    // Reset the protocol ID registers
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
-
     // If at least one rule logs the matched packets, populate ctx->log_map
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
         EMIT_LOAD_LOG_FD_FIXUP(program, BPF_REG_2);
@@ -668,8 +664,8 @@ int bf_program_generate(struct bf_program *program)
 
     // Zeroing IPv6 extension headers
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR)) {
-        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_7,
-                                  BF_PROG_CTX_OFF(ipv6_eh)));
+        EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10,
+                                 BF_PROG_CTX_OFF(ipv6_eh), 0));
     }
 
     program->runtime.needs_l4 = _bf_program_needs_l4_header(program);
