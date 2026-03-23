@@ -70,12 +70,6 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
-    /* Zero l2_hdr and l2_size (no dynptr L2 slice). */
-    EMIT(program,
-         BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(l2_hdr), 0));
-    EMIT(program,
-         BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), 0));
-
     /* Store the ingress ifindex into the runtime context. R1 still valid. */
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
                               offsetof(struct xdp_md, ingress_ifindex)));
