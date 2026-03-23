@@ -13,7 +13,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/socket.h>
 
 #include <bpfilter/btf.h>
 #include <bpfilter/flavor.h>
@@ -31,9 +30,6 @@
 
 #define BF_NF_PRIO_EVEN 2
 #define BF_NF_PRIO_ODD 1
-
-// Forward definition to avoid headers clusterfuck.
-uint16_t htons(uint16_t hostshort);
 
 static inline bool _bf_nf_hook_is_ingress(enum bf_hook hook)
 {
@@ -68,40 +64,21 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
 
-    /* BPF_PROG_TYPE_CGROUP_SKB doesn't provide access the the Ethernet header,
-     * so we can't parse it and discover the L3 protocol ID.
-     * Instead, we use the __sk_buff.family value and convert it to the
-     * corresponding ethertype. */
-    if ((offset = bf_btf_get_field_off("nf_hook_state", "pf")) < 0)
+    // Load skb pointer from bpf_nf_ctx.skb into R1 (R1 held ctx; state is
+    // already in R2 and ifindex has been stored, so ctx is no longer needed).
+    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
         return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_3, BPF_REG_2, offset));
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
 
-    {
-        struct bf_jmpctx ipv4jmp, ipv6jmp;
-
-        // Speculatively assume IPv4
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        ipv4jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_3, AF_INET, 0));
-
-        // Speculatively assume IPv6
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        ipv6jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_3, AF_INET6, 0));
-
-        // Default: unknown family
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
-
-        bf_jmpctx_cleanup(&ipv4jmp);
-        bf_jmpctx_cleanup(&ipv6jmp);
-    }
+    // Read sk_buff.protocol directly: it already holds the network-byte-order
+    // ethertype, replacing the 6-instruction pf→ethertype speculative dispatch.
+    if ((offset = bf_btf_get_field_off("sk_buff", "protocol")) < 0)
+        return offset;
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
 
     EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
 
     // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
-    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
     if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
         return offset;
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
