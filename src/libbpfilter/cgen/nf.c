@@ -66,27 +66,43 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
              BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
     }
 
-    // Load skb pointer from bpf_nf_ctx.skb into R1 (R1 held ctx; the ifindex
-    // chain above used R2/R3/R4, so R1 = bpf_nf_ctx* is still valid here).
-    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
-
-    // Read sk_buff.protocol directly when needed: it already holds the
-    // network-byte-order ethertype, replacing the pf→ethertype dispatch.
-    if (program->runtime.needs_l3_proto) {
-        if ((offset = bf_btf_get_field_off("sk_buff", "protocol")) < 0)
+    /* The skb pointer is needed when any of pkt_size, l3_proto, or l3 parsing
+     * is required.  When none of these apply, skip the bpf_nf_ctx→skb chase
+     * entirely and just zero pkt_size on the stack. */
+    if (program->runtime.needs_pkt_size || program->runtime.needs_l3_proto ||
+        program->runtime.needs_l3) {
+        // Load skb pointer from bpf_nf_ctx.skb into R1 (R1 held ctx; the
+        // ifindex chain above used R2/R3/R4, so R1 = bpf_nf_ctx* is still
+        // valid here).
+        if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
             return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
-    }
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
 
-    // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
-    if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
-    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, ETH_HLEN));
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(pkt_size)));
+        // Read sk_buff.protocol directly when needed: it already holds the
+        // network-byte-order ethertype, replacing the pf→ethertype dispatch.
+        if (program->runtime.needs_l3_proto) {
+            if ((offset = bf_btf_get_field_off("sk_buff", "protocol")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
+        }
+
+        // Calculate the packet size (+ETH_HLEN) and store it, or zero it
+        if (program->runtime.needs_pkt_size) {
+            if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
+            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, ETH_HLEN));
+            EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2,
+                                      BF_PROG_CTX_OFF(pkt_size)));
+        } else {
+            EMIT(program,
+                 BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
+        }
+    } else {
+        // No skb access needed at all - just zero pkt_size on the stack
+        EMIT(program,
+             BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
+    }
 
     if (program->runtime.needs_l3) {
         r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);

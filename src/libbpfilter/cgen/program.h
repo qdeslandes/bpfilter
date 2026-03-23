@@ -245,6 +245,13 @@ struct bf_program
          * populated with the ethertype from the packet context, decoupled
          * from whether full dynptr/L3 header parsing is required. */
         bool needs_l3_proto;
+
+        /** True if at least one non-disabled rule has @c counters or @c log
+         * enabled. When false, the prologue skips the packet-length
+         * computation and stores zero to @c ctx->pkt_size instead, saving
+         * 1–3 BPF instructions per packet. The policy/error counter still
+         * increments its packet count; only the byte-size field is zeroed. */
+        bool needs_pkt_size;
     } runtime;
 };
 

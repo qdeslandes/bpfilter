@@ -32,11 +32,16 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
-    // Copy the packet size into the runtime context
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
-                              offsetof(struct __sk_buff, len)));
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
+    // Copy the packet size into the runtime context (or zero it if unused)
+    if (program->runtime.needs_pkt_size) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
+                                  offsetof(struct __sk_buff, len)));
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3,
+                                  BF_PROG_CTX_OFF(pkt_size)));
+    } else {
+        EMIT(program,
+             BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
+    }
 
     /** The @c __sk_buff structure contains two fields related to the interface
      * index: @c ingress_ifindex and @c ifindex . @c ingress_ifindex is the

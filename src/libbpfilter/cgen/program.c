@@ -523,6 +523,39 @@ static bool _bf_program_needs_l4_header(const struct bf_program *program)
     return false;
 }
 
+/**
+ * @brief Check whether any rule in the chain requires @c pkt_size to be set.
+ *
+ * Returns true as soon as it finds a non-disabled rule that has either
+ * per-rule counters (@c rule->counters ) or logging (@c rule->log ) enabled,
+ * since both the @ref BF_ELFSTUB_UPDATE_COUNTERS and @ref BF_ELFSTUB_LOG
+ * elfstubs read @c ctx->pkt_size to fill the byte-count field of
+ * @c struct bf_counter . When false, the prologue stores zero to
+ * @c ctx->pkt_size instead of computing the real packet length, saving
+ * 1–3 BPF instructions on the fast path.
+ *
+ * @param program Program to inspect. Can't be NULL.
+ * @return true if the packet-length computation is required, false otherwise.
+ */
+static bool _bf_program_needs_pkt_size(const struct bf_program *program)
+{
+    const struct bf_chain *chain = program->runtime.chain;
+
+    assert(program);
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        if (rule->counters || rule->log)
+            return true;
+    }
+
+    return false;
+}
+
 static int _bf_program_generate_rule(struct bf_program *program,
                                      struct bf_rule *rule)
 {
@@ -839,6 +872,7 @@ int bf_program_generate(struct bf_program *program)
     program->runtime.needs_l4 = _bf_program_needs_l4_header(program);
     program->runtime.needs_ifindex = _bf_program_needs_ifindex(program);
     program->runtime.needs_l3_proto = _bf_program_needs_l3_proto(program);
+    program->runtime.needs_pkt_size = _bf_program_needs_pkt_size(program);
 
     r = program->runtime.ops->gen_inline_prologue(program);
     if (r)
