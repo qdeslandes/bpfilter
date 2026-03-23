@@ -184,11 +184,11 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
         // Default: unsupported protocol
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+        _ = bf_jmpctx_get(program, BPF_JMP_A(0));
 
         bf_jmpctx_cleanup(&ipv4jmp);
         bf_jmpctx_cleanup(&ipv6jmp);
     }
-    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
 
     EMIT(program,
          BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l3_size)));
@@ -332,30 +332,25 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
         tcpjmp = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 0));
 
-        // Speculatively assume UDP
+        /* UDP, ICMP, and ICMPv6 share the same header size (8 bytes): emit the
+         * size once, then check each protocol with consecutive comparisons. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
         udpjmp = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_UDP, 0));
-
-        // Speculatively assume ICMP
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
         icmpjmp = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMP, 0));
-
-        // Speculatively assume ICMPv6
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
         icmpv6jmp = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMPV6, 0));
 
         // Default: unsupported protocol
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+        _ = bf_jmpctx_get(program, BPF_JMP_A(0));
 
         bf_jmpctx_cleanup(&tcpjmp);
         bf_jmpctx_cleanup(&udpjmp);
         bf_jmpctx_cleanup(&icmpjmp);
         bf_jmpctx_cleanup(&icmpv6jmp);
     }
-    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
     EMIT(program,
          BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l4_size)));
