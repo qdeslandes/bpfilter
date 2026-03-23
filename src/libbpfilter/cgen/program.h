@@ -220,6 +220,15 @@ struct bf_program
          * the @ref bf_program doesn't have to manage its lifetime. */
         const struct bf_chain *chain;
 
+        /** True if at least one rule matcher requires the L3 header (and
+         * dynptr) to be set up. When false, the prologue skips the
+         * @ref bf_stub_make_ctx_*_dynptr and @ref bf_stub_parse_l3_hdr
+         * calls entirely, saving 2 kfunc calls and ~40+ BPF instructions
+         * per packet for chains that match solely on metadata fields that
+         * do not require packet header access (e.g. iface, l3_proto,
+         * mark, flow_hash). */
+        bool needs_l3;
+
         /** True if at least one rule matcher requires the L4 header to be
          * parsed. When false, the prologue skips the @ref bf_stub_parse_l4_hdr
          * call, saving ~25 BPF instructions per packet for chains that only

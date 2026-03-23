@@ -76,20 +76,27 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
-    /* Create the XDP dynptr. R1 still points to xdp_md. */
-    r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
-    if (r)
-        return r;
-
-    /* Parse L3 (R7 already holds the ethertype) and optionally L4. */
-    r = bf_stub_parse_l3_hdr(program, ETH_HLEN);
-    if (r)
-        return r;
-
-    if (program->runtime.needs_l4) {
-        r = bf_stub_parse_l4_hdr(program);
+    if (program->runtime.needs_l3) {
+        /* Create the XDP dynptr. R1 still points to xdp_md. */
+        r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
         if (r)
             return r;
+
+        /* Parse L3 (R7 already holds the ethertype) and optionally L4. */
+        r = bf_stub_parse_l3_hdr(program, ETH_HLEN);
+        if (r)
+            return r;
+
+        if (program->runtime.needs_l4) {
+            r = bf_stub_parse_l4_hdr(program);
+            if (r)
+                return r;
+        }
+    } else {
+        /* No rule inspects L3/L4 headers: skip dynptr creation and header
+         * parsing entirely.  Zero R8 (L4 protocol ID) so that any stale
+         * register value cannot accidentally satisfy a protocol guard. */
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
     }
 
     return 0;

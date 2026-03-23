@@ -284,6 +284,103 @@ static int _bf_program_fixup(struct bf_program *program,
 }
 
 /**
+ * @brief Check whether any matcher in the chain requires L3 header parsing.
+ *
+ * Iterates over all (non-disabled) rules and their matchers. Returns true as
+ * soon as it finds a matcher that requires the dynptr to be created and the
+ * L3 header slice to be populated by @ref bf_stub_parse_l3_hdr . This
+ * includes:
+ * - Explicit L3 packet matchers (IPv4/IPv6 fields).
+ * - Explicit L4 packet matchers (TCP/UDP/ICMP/ICMPv6 fields), since L4
+ *   parsing requires L3 to be set up first.
+ * - The @c meta.l4_proto matcher, which reads @c R8 that is populated
+ *   during L3 header parsing.
+ * - Meta port matchers (@c meta.sport / @c meta.dport ) and flow-probability
+ *   matchers, which dereference @c l4_hdr set up by @ref bf_stub_parse_l4_hdr
+ *   (which itself requires L3).
+ * - Set matchers whose key contains at least one L3- or L4-layer component.
+ * - Any rule with logging enabled (@c rule->log != 0 ), since the log elfstub
+ *   may dereference @c ctx->l3_hdr / @c ctx->l4_hdr .
+ *
+ * @param program Program to inspect. Can't be NULL.
+ * @return true if L3 parsing (and dynptr creation) is required, false
+ *         otherwise.
+ */
+static bool _bf_program_needs_l3_header(const struct bf_program *program)
+{
+    const struct bf_chain *chain = program->runtime.chain;
+
+    assert(program);
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        if (rule->log)
+            return true;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+            enum bf_matcher_type type = bf_matcher_get_type(matcher);
+
+            if (type == BF_MATCHER_SET) {
+                const struct bf_set *set =
+                    bf_chain_get_set_for_matcher(chain, matcher);
+
+                if (!set)
+                    continue;
+
+                for (size_t i = 0; i < set->n_comps; ++i) {
+                    const struct bf_matcher_meta *meta =
+                        bf_matcher_get_meta(set->key[i]);
+
+                    if (meta && (meta->layer == BF_MATCHER_LAYER_3 ||
+                                 meta->layer == BF_MATCHER_LAYER_4))
+                        return true;
+                }
+                continue;
+            }
+
+            switch (type) {
+            case BF_MATCHER_META_L4_PROTO:
+            case BF_MATCHER_META_SPORT:
+            case BF_MATCHER_META_DPORT:
+            case BF_MATCHER_META_FLOW_PROBABILITY:
+            case BF_MATCHER_IP4_SADDR:
+            case BF_MATCHER_IP4_SNET:
+            case BF_MATCHER_IP4_DADDR:
+            case BF_MATCHER_IP4_DNET:
+            case BF_MATCHER_IP4_PROTO:
+            case BF_MATCHER_IP4_DSCP:
+            case BF_MATCHER_IP6_SADDR:
+            case BF_MATCHER_IP6_SNET:
+            case BF_MATCHER_IP6_DADDR:
+            case BF_MATCHER_IP6_DNET:
+            case BF_MATCHER_IP6_NEXTHDR:
+            case BF_MATCHER_IP6_DSCP:
+            case BF_MATCHER_TCP_SPORT:
+            case BF_MATCHER_TCP_DPORT:
+            case BF_MATCHER_TCP_FLAGS:
+            case BF_MATCHER_UDP_SPORT:
+            case BF_MATCHER_UDP_DPORT:
+            case BF_MATCHER_ICMP_TYPE:
+            case BF_MATCHER_ICMP_CODE:
+            case BF_MATCHER_ICMPV6_TYPE:
+            case BF_MATCHER_ICMPV6_CODE:
+                return true;
+            default:
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
  * @brief Check whether any matcher in the chain requires L4 header parsing.
  *
  * Iterates over all (non-disabled) rules and their matchers. Returns true as
@@ -668,6 +765,7 @@ int bf_program_generate(struct bf_program *program)
                                  BF_PROG_CTX_OFF(ipv6_eh), 0));
     }
 
+    program->runtime.needs_l3 = _bf_program_needs_l3_header(program);
     program->runtime.needs_l4 = _bf_program_needs_l4_header(program);
 
     r = program->runtime.ops->gen_inline_prologue(program);
