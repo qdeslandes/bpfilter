@@ -10,7 +10,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/socket.h>
 
 #include <bpfilter/btf.h>
 #include <bpfilter/flavor.h>
@@ -19,7 +18,6 @@
 #include <bpfilter/verdict.h>
 
 #include "cgen/cgen.h"
-#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/matcher/packet.h"
 #include "cgen/program.h"
@@ -27,12 +25,8 @@
 #include "filter.h"
 #include "linux/bpf.h"
 
-// Forward definition to avoid headers clusterfuck.
-uint16_t htons(uint16_t hostshort);
-
 static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
 {
-    int offset;
     int r;
 
     assert(program);
@@ -58,33 +52,12 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
-    /* BPF_PROG_TYPE_CGROUP_SKB doesn't provide access the the Ethernet header,
-     * so we can't parse it and discover the L3 protocol ID.
-     * Instead, we use the __sk_buff.family value and convert it to the
-     * corresponding ethertype. */
-    if ((offset = bf_btf_get_field_off("__sk_buff", "family")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
-
-    {
-        struct bf_jmpctx ipv4jmp, ipv6jmp;
-
-        // Speculatively assume IPv4
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        ipv4jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET, 0));
-
-        // Speculatively assume IPv6
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        ipv6jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET6, 0));
-
-        // Default: unknown family
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
-
-        bf_jmpctx_cleanup(&ipv4jmp);
-        bf_jmpctx_cleanup(&ipv6jmp);
-    }
+    /* __sk_buff.protocol already contains the L3 protocol ID (ethertype) in
+     * network byte order — the same value previously reconstructed from
+     * __sk_buff.family via a multi-instruction dispatch. Load it directly into
+     * R7 for the downstream bf_stub_parse_l3_hdr dispatch. */
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
+                              offsetof(struct __sk_buff, protocol)));
 
     EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
 
