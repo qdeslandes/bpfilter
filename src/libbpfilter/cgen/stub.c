@@ -278,6 +278,10 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
         // Process EH
         EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
+        /* Deferred store: l3_offset is only consumed by the EH elfstubs, so
+         * write it here on this cold path instead of in every flavor prologue. */
+        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
+                                 l3_offset));
         // If any rule filters on ipv6.nexthdr, store the EH in the runtime context
         // during process, so we won't have to process the EH again.
         if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR))

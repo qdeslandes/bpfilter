@@ -59,8 +59,6 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
                               offsetof(struct __sk_buff, protocol)));
 
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
-
     r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)
         return r;

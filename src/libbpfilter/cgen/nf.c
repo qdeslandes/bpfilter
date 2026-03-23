@@ -76,8 +76,6 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
         return offset;
     EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
 
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
-
     // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
     if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
         return offset;

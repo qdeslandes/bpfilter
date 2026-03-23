@@ -70,9 +70,7 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
-    /* Set l3_offset = ETH_HLEN; zero l2_hdr and l2_size (no dynptr L2 slice). */
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
-                             sizeof(struct ethhdr)));
+    /* Zero l2_hdr and l2_size (no dynptr L2 slice). */
     EMIT(program,
          BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(l2_hdr), 0));
     EMIT(program,
