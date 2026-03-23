@@ -228,31 +228,20 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l3_hdr)));
 
     /* Unsupported L3 protocols have been filtered out at the beginning of this
-     * function and would jump over the block below, so there is no need to
-     * worry about them here. */
+     * function and would jump over the block below, so R7 is guaranteed to be
+     * exactly IPv4 or IPv6 here. Use a single if-else dispatch: JEQ for IPv4
+     * (taken path), fall-through for IPv6. This saves one BPF instruction on
+     * the IPv4 fast path compared to two independent JNE checks. */
     {
-        // IPv4
-        _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
-
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
-        EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
-        EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
-        if (l3_offset != 0)
-            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
-        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
-                                  BF_PROG_CTX_OFF(l4_offset)));
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
-                                  offsetof(struct iphdr, protocol)));
-    }
-
-    {
-        // IPv6
+        struct bf_jmpctx ipv4jmp, afterjmp;
         struct bf_jmpctx tcpjmp, udpjmp, noehjmp, ehjmp;
         struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, _BF_LOW_EH_BITMASK)};
-        _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
+        // Single dispatch: if IPv4, jump to ipv4_path; fall through to IPv6
+        ipv4jmp = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IP), 0));
+
+        // IPv6 processing (fall-through: not IPv4 means must be IPv6)
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
                                   offsetof(struct ipv6hdr, nexthdr)));
 
@@ -310,6 +299,26 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
                         l3_offset + sizeof(struct ipv6hdr)));
 
         bf_jmpctx_cleanup(&ehjmp);
+
+        // Unconditional jump to after_l3, skipping IPv4 processing
+        afterjmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+        // ipv4_path label: patch ipv4jmp to jump here
+        bf_jmpctx_cleanup(&ipv4jmp);
+
+        // IPv4 processing
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
+        EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
+        EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
+        if (l3_offset != 0)
+            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
+                                  BF_PROG_CTX_OFF(l4_offset)));
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
+                                  offsetof(struct iphdr, protocol)));
+
+        // after_l3 label: patch afterjmp to jump here
+        bf_jmpctx_cleanup(&afterjmp);
     }
 
     return 0;
