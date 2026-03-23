@@ -90,7 +90,7 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
         return r;
 
     /* Parse L3 (R7 already holds the ethertype) and optionally L4. */
-    r = bf_stub_parse_l3_hdr(program);
+    r = bf_stub_parse_l3_hdr(program, ETH_HLEN);
     if (r)
         return r;
 

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 struct bf_matcher_meta;
 struct bf_program;
@@ -70,9 +71,11 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program);
  * a dynamic pointer slice, and the L3 protocol ID register is set to 0.
  *
  * @param program Program to emit instructions into.
+ * @param l3_offset Compile-time constant byte offset of the L3 header from
+ *        the start of the packet (0 for NF/cgroup_skb, ETH_HLEN for TC/XDP).
  * @return 0 on success, or negative errno value on error.
  */
-int bf_stub_parse_l3_hdr(struct bf_program *program);
+int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset);
 
 /**
  * Emit instructions to get a dynptr slice for the packet's L4 header.

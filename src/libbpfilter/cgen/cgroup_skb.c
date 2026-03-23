@@ -92,7 +92,7 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     if (r)
         return r;
 
-    r = bf_stub_parse_l3_hdr(program);
+    r = bf_stub_parse_l3_hdr(program, 0);
     if (r)
         return r;
 
