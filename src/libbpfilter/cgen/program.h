@@ -234,6 +234,17 @@ struct bf_program
          * call, saving ~25 BPF instructions per packet for chains that only
          * match on L2/L3 fields or metadata. */
         bool needs_l4;
+
+        /** True if at least one non-disabled rule has a
+         * @c BF_MATCHER_META_IFACE matcher. When false, the prologue skips
+         * the interface-index load and store entirely. */
+        bool needs_ifindex;
+
+        /** True when @c needs_l3 is true OR at least one non-disabled rule
+         * uses @c BF_MATCHER_META_L3_PROTO . Controls whether R7 must be
+         * populated with the ethertype from the packet context, decoupled
+         * from whether full dynptr/L3 header parsing is required. */
+        bool needs_l3_proto;
     } runtime;
 };
 

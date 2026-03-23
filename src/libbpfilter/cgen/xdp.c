@@ -44,37 +44,41 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
                               offsetof(struct xdp_md, data_end)));
 
-    /* Bounds check: data + ETH_HLEN <= data_end; accept short/invalid frames.
-     * This replaces bf_stub_parse_l2_ethhdr(), which called bpf_dynptr_slice()
-     * just to read ethhdr.h_proto. R4 is a scratch register for the check.
-     * R7 is callee-saved and will hold the ethertype across the kfunc call. */
-    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_2));
-    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN));
-    {
-        _clean_bf_jmpctx_ struct bf_jmpctx _ =
-            bf_jmpctx_get(program, BPF_JMP_REG(BPF_JLE, BPF_REG_4, BPF_REG_3, 0));
+    if (program->runtime.needs_l3_proto) {
+        /* Bounds check: data + ETH_HLEN <= data_end; accept short/invalid
+         * frames. Only needed when we will dereference packet memory to read
+         * the ethertype. R4 is a scratch register for the check. R7 is
+         * callee-saved and will hold the ethertype across the kfunc call. */
+        EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_2));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN));
+        {
+            _clean_bf_jmpctx_ struct bf_jmpctx _ =
+                bf_jmpctx_get(program, BPF_JMP_REG(BPF_JLE, BPF_REG_4, BPF_REG_3, 0));
 
-        r = program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT);
-        if (r < 0)
-            return r;
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_0, r));
-        EMIT(program, BPF_EXIT_INSN());
+            r = program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT);
+            if (r < 0)
+                return r;
+            EMIT(program, BPF_MOV64_IMM(BPF_REG_0, r));
+            EMIT(program, BPF_EXIT_INSN());
+        }
+
+        /* Read ethertype directly via XDP packet access into R7. */
+        EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_2,
+                                  offsetof(struct ethhdr, h_proto)));
     }
-
-    /* Read ethertype directly via XDP packet access into R7. */
-    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_2,
-                              offsetof(struct ethhdr, h_proto)));
 
     /* Compute pkt_size = data_end - data and store it into the runtime context. */
     EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_3, BPF_REG_2));
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
-    /* Store the ingress ifindex into the runtime context. R1 still valid. */
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                              offsetof(struct xdp_md, ingress_ifindex)));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (program->runtime.needs_ifindex) {
+        /* Store the ingress ifindex into the runtime context. R1 still valid. */
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                                  offsetof(struct xdp_md, ingress_ifindex)));
+        EMIT(program,
+             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    }
 
     if (program->runtime.needs_l3) {
         /* Create the XDP dynptr. R1 still points to xdp_md. */
@@ -92,10 +96,10 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else {
-        /* No rule inspects L3/L4 headers: skip dynptr creation and header
-         * parsing entirely.  Zero R8 (L4 protocol ID) so that any stale
-         * register value cannot accidentally satisfy a protocol guard. */
+    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+        /* No L3/L4 header parsing needed, but some prologue loads were
+         * emitted.  Zero R8 (L4 protocol ID) so that any stale register
+         * value cannot accidentally satisfy a protocol guard. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
     }
 

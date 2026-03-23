@@ -46,18 +46,21 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
      * @c ingress_ifindex will contain @c 1 but @c ifindex will contains @c 2 .
      * For egress, only @c ifindex is used.
      */
-    if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
-        return r;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (program->runtime.needs_ifindex) {
+        if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
+            return r;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
+        EMIT(program,
+             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    }
 
     /* __sk_buff.protocol already contains the L3 protocol ID (ethertype) in
-     * network byte order — the same value previously reconstructed from
-     * __sk_buff.family via a multi-instruction dispatch. Load it directly into
-     * R7 for the downstream bf_stub_parse_l3_hdr dispatch. */
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
-                              offsetof(struct __sk_buff, protocol)));
+     * network byte order. Load it directly into R7 for the downstream
+     * bf_stub_parse_l3_hdr dispatch when needed. */
+    if (program->runtime.needs_l3_proto) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
+                                  offsetof(struct __sk_buff, protocol)));
+    }
 
     if (program->runtime.needs_l3) {
         r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
@@ -73,10 +76,10 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else {
-        /* No rule inspects L3/L4 headers: skip dynptr creation and header
-         * parsing entirely.  Zero R8 (L4 protocol ID) so that any stale
-         * register value cannot accidentally satisfy a protocol guard. */
+    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+        /* No L3/L4 header parsing needed, but some prologue loads were
+         * emitted.  Zero R8 (L4 protocol ID) so that any stale register
+         * value cannot accidentally satisfy a protocol guard. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
     }
 

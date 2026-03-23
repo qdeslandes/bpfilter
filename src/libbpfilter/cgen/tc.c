@@ -46,19 +46,22 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
      * @c ingress_ifindex will contain @c 1 but @c ifindex will contains @c 2 .
      * For egress, only @c ifindex is used.
      */
-    if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
-        return r;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (program->runtime.needs_ifindex) {
+        if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
+            return r;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
+        EMIT(program,
+             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    }
 
-    /* Read the L3 protocol ID directly from the TC context and set l3_offset.
-     * This replaces bf_stub_parse_l2_ethhdr(), which would call
-     * bpf_dynptr_slice() just to read ethhdr.h_proto — a field that
-     * __sk_buff.protocol already exposes.  R1 still points to __sk_buff here;
-     * R7 is callee-saved so it survives the kfunc call below. */
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
-                              offsetof(struct __sk_buff, protocol)));
+    /* Read the L3 protocol ID directly from the TC context when needed.
+     * __sk_buff.protocol already exposes the ethertype in network byte order.
+     * R1 still points to __sk_buff here; R7 is callee-saved so it survives
+     * the kfunc call below. */
+    if (program->runtime.needs_l3_proto) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_1,
+                                  offsetof(struct __sk_buff, protocol)));
+    }
 
     if (program->runtime.needs_l3) {
         r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
@@ -74,10 +77,10 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else {
-        /* No rule inspects L3/L4 headers: skip dynptr creation and header
-         * parsing entirely.  Zero R8 (L4 protocol ID) so that any stale
-         * register value cannot accidentally satisfy a protocol guard. */
+    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+        /* No L3/L4 header parsing needed, but some prologue loads were
+         * emitted.  Zero R8 (L4 protocol ID) so that any stale register
+         * value cannot accidentally satisfy a protocol guard. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
     }
 

@@ -381,6 +381,76 @@ static bool _bf_program_needs_l3_header(const struct bf_program *program)
 }
 
 /**
+ * @brief Check whether any matcher in the chain requires the ifindex.
+ *
+ * Iterates over all (non-disabled) rules and their matchers. Returns true as
+ * soon as it finds a @c BF_MATCHER_META_IFACE matcher.
+ *
+ * @param program Program to inspect. Can't be NULL.
+ * @return true if ifindex load and store is required, false otherwise.
+ */
+static bool _bf_program_needs_ifindex(const struct bf_program *program)
+{
+    const struct bf_chain *chain = program->runtime.chain;
+
+    assert(program);
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+
+            if (bf_matcher_get_type(matcher) == BF_MATCHER_META_IFACE)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @brief Check whether the L3 protocol ID (R7) must be loaded from context.
+ *
+ * Returns true when @c needs_l3 is already true (full header parsing needed)
+ * OR when at least one non-disabled rule has a @c BF_MATCHER_META_L3_PROTO
+ * matcher. This decouples populating R7 from the heavier dynptr/L3-parse path.
+ *
+ * @param program Program to inspect. Can't be NULL.
+ * @return true if R7 must hold the ethertype, false otherwise.
+ */
+static bool _bf_program_needs_l3_proto(const struct bf_program *program)
+{
+    const struct bf_chain *chain = program->runtime.chain;
+
+    assert(program);
+
+    if (program->runtime.needs_l3)
+        return true;
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+
+            if (bf_matcher_get_type(matcher) == BF_MATCHER_META_L3_PROTO)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * @brief Check whether any matcher in the chain requires L4 header parsing.
  *
  * Iterates over all (non-disabled) rules and their matchers. Returns true as
@@ -767,6 +837,8 @@ int bf_program_generate(struct bf_program *program)
 
     program->runtime.needs_l3 = _bf_program_needs_l3_header(program);
     program->runtime.needs_l4 = _bf_program_needs_l4_header(program);
+    program->runtime.needs_ifindex = _bf_program_needs_ifindex(program);
+    program->runtime.needs_l3_proto = _bf_program_needs_l3_proto(program);
 
     r = program->runtime.ops->gen_inline_prologue(program);
     if (r)

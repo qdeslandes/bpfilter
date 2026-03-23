@@ -44,37 +44,41 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
-    // Copy the ifindex from to bpf_nf_ctx.state.{in,out}.ifindex the runtime context
-    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, offset));
-    if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
+    if (program->runtime.needs_ifindex) {
+        // Copy the ifindex from bpf_nf_ctx.state.{in,out}.ifindex to runtime context
+        if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
             return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
-    } else {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, offset));
+        if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        } else {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        }
+
+        if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
             return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
+        EMIT(program,
+             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
     }
 
-    if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
-
-    // Load skb pointer from bpf_nf_ctx.skb into R1 (R1 held ctx; state is
-    // already in R2 and ifindex has been stored, so ctx is no longer needed).
+    // Load skb pointer from bpf_nf_ctx.skb into R1 (R1 held ctx; the ifindex
+    // chain above used R2/R3/R4, so R1 = bpf_nf_ctx* is still valid here).
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
         return offset;
     EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
 
-    // Read sk_buff.protocol directly: it already holds the network-byte-order
-    // ethertype, replacing the 6-instruction pf→ethertype speculative dispatch.
-    if ((offset = bf_btf_get_field_off("sk_buff", "protocol")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
+    // Read sk_buff.protocol directly when needed: it already holds the
+    // network-byte-order ethertype, replacing the pf→ethertype dispatch.
+    if (program->runtime.needs_l3_proto) {
+        if ((offset = bf_btf_get_field_off("sk_buff", "protocol")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_1, offset));
+    }
 
     // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
     if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
@@ -98,10 +102,10 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else {
-        /* No rule inspects L3/L4 headers: skip dynptr creation and header
-         * parsing entirely.  Zero R8 (L4 protocol ID) so that any stale
-         * register value cannot accidentally satisfy a protocol guard. */
+    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+        /* No L3/L4 header parsing needed, but some prologue loads were
+         * emitted.  Zero R8 (L4 protocol ID) so that any stale register
+         * value cannot accidentally satisfy a protocol guard. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
     }
 
