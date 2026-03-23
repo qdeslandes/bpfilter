@@ -298,9 +298,10 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
         bf_jmpctx_cleanup(&noehjmp);
 
         // Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr)
-        EMIT(program,
-             BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
-                        l3_offset + sizeof(struct ipv6hdr)));
+        if (program->runtime.needs_l4)
+            EMIT(program,
+                 BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
+                            l3_offset + sizeof(struct ipv6hdr)));
 
         bf_jmpctx_cleanup(&ehjmp);
 
@@ -311,13 +312,15 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
         bf_jmpctx_cleanup(&ipv4jmp);
 
         // IPv4 processing
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
-        EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
-        EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
-        if (l3_offset != 0)
-            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
-        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
-                                  BF_PROG_CTX_OFF(l4_offset)));
+        if (program->runtime.needs_l4) {
+            EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
+            EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
+            EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
+            if (l3_offset != 0)
+                EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
+            EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
+                                      BF_PROG_CTX_OFF(l4_offset)));
+        }
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
                                   offsetof(struct iphdr, protocol)));
 
