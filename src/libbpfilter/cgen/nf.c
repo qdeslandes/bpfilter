@@ -62,8 +62,8 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
         if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
             return offset;
         EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
-        EMIT(program,
-             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(ifindex)));
     }
 
     /* The skb pointer is needed when any of pkt_size, l3_proto, or l3 parsing
@@ -118,7 +118,8 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+    } else if (program->runtime.needs_l3_proto ||
+               program->runtime.needs_ifindex) {
         /* No L3/L4 header parsing needed, but some prologue loads were
          * emitted.  Zero R8 (L4 protocol ID) so that any stale register
          * value cannot accidentally satisfy a protocol guard. */

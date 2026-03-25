@@ -864,8 +864,8 @@ int bf_program_generate(struct bf_program *program)
 
     // Zeroing IPv6 extension headers
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR)) {
-        EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10,
-                                 BF_PROG_CTX_OFF(ipv6_eh), 0));
+        EMIT(program,
+             BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(ipv6_eh), 0));
     }
 
     program->runtime.needs_l3 = _bf_program_needs_l3_header(program);

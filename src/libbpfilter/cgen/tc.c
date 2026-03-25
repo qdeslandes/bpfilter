@@ -55,8 +55,8 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
         if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
             return r;
         EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
-        EMIT(program,
-             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
     }
 
     /* Read the L3 protocol ID directly from the TC context when needed.
@@ -82,7 +82,8 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+    } else if (program->runtime.needs_l3_proto ||
+               program->runtime.needs_ifindex) {
         /* No L3/L4 header parsing needed, but some prologue loads were
          * emitted.  Zero R8 (L4 protocol ID) so that any stale register
          * value cannot accidentally satisfy a protocol guard. */

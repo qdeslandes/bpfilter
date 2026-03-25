@@ -58,8 +58,7 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
             EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN));
             {
                 _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
-                    program,
-                    BPF_JMP_REG(BPF_JLE, BPF_REG_4, BPF_REG_3, 0));
+                    program, BPF_JMP_REG(BPF_JLE, BPF_REG_4, BPF_REG_3, 0));
 
                 r = program->runtime.ops->get_verdict(BF_VERDICT_ACCEPT);
                 if (r < 0)
@@ -92,8 +91,8 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
         /* Store the ingress ifindex into the runtime context. R1 still valid. */
         EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
                                   offsetof(struct xdp_md, ingress_ifindex)));
-        EMIT(program,
-             BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
     }
 
     if (program->runtime.needs_l3) {
@@ -112,7 +111,8 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
             if (r)
                 return r;
         }
-    } else if (program->runtime.needs_l3_proto || program->runtime.needs_ifindex) {
+    } else if (program->runtime.needs_l3_proto ||
+               program->runtime.needs_ifindex) {
         /* No L3/L4 header parsing needed, but some prologue loads were
          * emitted.  Zero R8 (L4 protocol ID) so that any stale register
          * value cannot accidentally satisfy a protocol guard. */

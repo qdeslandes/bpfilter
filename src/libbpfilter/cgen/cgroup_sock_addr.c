@@ -50,13 +50,13 @@ static int _bf_cgroup_sock_addr_gen_inline_prologue(struct bf_program *program)
 
         // Speculatively assume IPv4
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        ipv4jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET, 0));
+        ipv4jmp =
+            bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET, 0));
 
         // Speculatively assume IPv6
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        ipv6jmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET6, 0));
+        ipv6jmp = bf_jmpctx_get(program,
+                                BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, AF_INET6, 0));
 
         // Default: unknown family
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));

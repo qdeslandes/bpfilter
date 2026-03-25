@@ -405,8 +405,6 @@ int bf_matcher_generate_packet(struct bf_program *program,
     case BF_MATCHER_IP4_SADDR:
     case BF_MATCHER_IP4_DADDR:
     case BF_MATCHER_IP4_PROTO:
-    case BF_MATCHER_IP6_SADDR:
-    case BF_MATCHER_IP6_DADDR:
     case BF_MATCHER_ICMP_TYPE:
     case BF_MATCHER_ICMP_CODE:
     case BF_MATCHER_ICMPV6_TYPE:

@@ -30,7 +30,6 @@
 #include "cgen/jmp.h"
 #include "cgen/printer.h"
 #include "cgen/program.h"
-#include "ctx.h"
 #include "filter.h"
 
 #define _BF_LOW_EH_BITMASK 0x1801800000000801ULL
@@ -178,8 +177,7 @@ int bf_stub_parse_l3_hdr(struct bf_program *program, uint32_t l3_offset)
         // Speculatively assume IPv6
         EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
         ipv6jmp = bf_jmpctx_get(
-            program,
-            BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
         // Default: unsupported protocol
         EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
@@ -345,14 +343,14 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
 
         // Speculatively assume TCP
         EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
-        tcpjmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 0));
+        tcpjmp = bf_jmpctx_get(program,
+                               BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 0));
 
         /* UDP, ICMP, and ICMPv6 share the same header size (8 bytes): emit the
          * size once, then check each protocol with consecutive comparisons. */
         EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
-        udpjmp = bf_jmpctx_get(
-            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_UDP, 0));
+        udpjmp = bf_jmpctx_get(program,
+                               BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_UDP, 0));
         icmpjmp = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMP, 0));
         icmpv6jmp = bf_jmpctx_get(
