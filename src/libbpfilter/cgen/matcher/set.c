@@ -20,8 +20,8 @@ static int _bf_matcher_generate_set_trie(struct bf_program *program,
 
     const struct bf_set *set =
         bf_chain_get_set_for_matcher(program->runtime.chain, matcher);
-    enum bf_matcher_type type = set->key[0];
-    const struct bf_matcher_meta *meta = bf_matcher_get_meta(type);
+    enum bf_matcher_type type;
+    const struct bf_matcher_meta *meta;
     int r;
 
     if (!set) {
@@ -29,6 +29,9 @@ static int _bf_matcher_generate_set_trie(struct bf_program *program,
                         *(uint32_t *)bf_matcher_payload(matcher),
                         program->runtime.chain->name);
     }
+
+    type = set->key[0];
+    meta = bf_matcher_get_meta(type);
 
     r = bf_stub_rule_check_protocol(program, meta);
     if (r)
