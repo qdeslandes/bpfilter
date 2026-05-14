@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import html
 import json
 import multiprocessing
 import pathlib
@@ -50,6 +51,8 @@ class Config:
     hint: str | None = None
     dry_run: bool = False
     propose_only: bool = False
+    serve: bool = False
+    port: int = 8080
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Config:
@@ -63,6 +66,8 @@ class Config:
             hint=args.hint,
             dry_run=args.dry_run,
             propose_only=args.propose_only,
+            serve=args.serve,
+            port=args.port,
         )
 
 
@@ -160,6 +165,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--propose-only",
         action="store_true",
         help="generate a proposal and save it to history without applying. Useful for inspecting model output.",
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="expose a local web UI on --port instead of running the loop headlessly.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="TCP port for --serve (default: 8080).",
     )
     return parser
 
@@ -504,6 +520,125 @@ def run(config: Config, history: History) -> int:
     return 0
 
 
+INDEX_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bfoptimize</title>
+<style>
+body {{ font-family: system-ui, sans-serif; padding: 2rem; max-width: 80rem; margin: 0 auto; color: #1f2937; }}
+h1 {{ margin-top: 0; }}
+header {{ display: flex; gap: 2rem; flex-wrap: wrap; align-items: baseline; }}
+header p {{ margin: 0; }}
+table {{ border-collapse: collapse; width: 100%; margin-top: 1.5rem; }}
+th, td {{ padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
+th {{ background: #f9fafb; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: #4b5563; }}
+td.id {{ font-variant-numeric: tabular-nums; color: #6b7280; }}
+.status {{ font-size: 0.85rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 4px; display: inline-block; }}
+.status-kept {{ background: #dcfce7; color: #166534; }}
+.status-rejected_tests, .status-rejected_benchmark {{ background: #fef3c7; color: #92400e; }}
+.status-applied, .status-proposed {{ background: #f3f4f6; color: #4b5563; }}
+.delta {{ font-variant-numeric: tabular-nums; }}
+.delta-neg {{ color: #166534; }}
+.delta-pos {{ color: #b91c1c; }}
+code {{ background: #f3f4f6; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }}
+.empty {{ padding: 2rem; text-align: center; color: #9ca3af; }}
+</style>
+</head>
+<body>
+<h1>bfoptimize</h1>
+<header>
+<p>Baseline: <code>{baseline}</code></p>
+<p>Attempts: {n_attempts}</p>
+</header>
+{body}
+</body>
+</html>
+"""
+
+
+def _render_index(history: History) -> str:
+    baseline = (
+        history.baseline_sha[:SHORT_SHA_LEN]
+        if history.baseline_sha
+        else "unset"
+    )
+    attempts = history.attempts
+    if not attempts:
+        body = '<div class="empty">No attempts yet.</div>'
+    else:
+        rows_html = []
+        for a in attempts:
+            delta = a.get("delta_time_pct")
+            if delta is None:
+                delta_str = "—"
+                delta_cls = ""
+            else:
+                delta_str = f"{delta:+.2f}%"
+                delta_cls = "delta-neg" if delta < 0 else "delta-pos"
+            status = a.get("status", "")
+            rows_html.append(
+                f"<tr>"
+                f"<td class='id'>#{a['id']}</td>"
+                f"<td><span class='status status-{html.escape(status)}'>{html.escape(status)}</span></td>"
+                f"<td class='delta {delta_cls}'>{delta_str}</td>"
+                f"<td>{html.escape(a.get('description', ''))}</td>"
+                f"</tr>"
+            )
+        body = (
+            "<table>"
+            "<thead><tr>"
+            "<th>#</th><th>Status</th><th>Δ time</th><th>Description</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows_html)}</tbody>"
+            "</table>"
+        )
+    return INDEX_TEMPLATE.format(
+        baseline=html.escape(baseline),
+        n_attempts=len(attempts),
+        body=body,
+    )
+
+
+def _make_app(config: Config) -> Any:
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
+
+    app = FastAPI(title="bfoptimize")
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        return _render_index(History(config.cache_dir))
+
+    @app.get("/api/history")
+    def api_history() -> dict[str, Any]:
+        h = History(config.cache_dir)
+        return {"baseline_sha": h.baseline_sha, "attempts": h.attempts}
+
+    return app
+
+
+def serve(config: Config) -> int:
+    try:
+        import uvicorn
+    except ImportError as e:
+        print(
+            f"error: {e}\n"
+            f"install dependencies with: "
+            f"pip install -r tools/bfoptimize.requirements.txt",
+            file=sys.stderr,
+        )
+        return 1
+
+    app = _make_app(config)
+    print(
+        f"bfoptimize serving on http://0.0.0.0:{config.port} (all interfaces)",
+        file=sys.stderr,
+    )
+    uvicorn.run(app, host="0.0.0.0", port=config.port, log_level="warning")
+    return 0
+
+
 def main() -> int:
     args = _build_parser().parse_args()
     config = Config.from_args(args)
@@ -514,6 +649,9 @@ def main() -> int:
         print(f"baseline_sha: {history.baseline_sha}")
         print(f"attempts: {len(history.attempts)}")
         return 0
+
+    if config.serve:
+        return serve(config)
 
     return run(config, history)
 
