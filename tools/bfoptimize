@@ -31,9 +31,6 @@ DEFAULT_EFFORT = "high"
 CGEN_DIR = "src/libbpfilter/cgen"
 SHORT_SHA_LEN = 7
 
-# Map --effort to a thinking budget. Higher effort = more reasoning tokens.
-EFFORT_BUDGETS = {"low": 4000, "medium": 16000, "high": 32000}
-
 # Shared state used by --serve mode. Thread-safe so the run thread can
 # publish log lines while uvicorn (in the main thread) drains them via SSE.
 _LOG_BUFFER: collections.deque[str] = collections.deque(maxlen=1000)
@@ -266,11 +263,11 @@ Output only the optimization proposal — no code yet."""
             "you may propose a different optimization if you judge it more impactful."
         )
 
-    budget = EFFORT_BUDGETS[config.effort]
     with client.messages.stream(
         model=config.model,
-        max_tokens=budget + 8000,
-        thinking={"type": "enabled", "budget_tokens": budget},
+        max_tokens=32000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": config.effort},
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for event in stream:
