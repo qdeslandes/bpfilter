@@ -25,7 +25,7 @@ Architecture of one iteration
    instructed to commit on green tests or to revert and exit otherwise.
 4. **Benchmark gate** — when the worktree HEAD has advanced, the commit is
    anchored under ``refs/bfoptimize/<id>`` so destroying the worktree
-   cannot orphan it. ``bfbencher_lib.compare()`` then runs the benchmark
+   cannot orphan it. ``bfbencher.compare()`` then runs the benchmark
    suite against both the baseline and the new commit, returning per-
    benchmark deltas. A baseline-runtime-weighted mean decides keep vs.
    discard:
@@ -110,7 +110,7 @@ How attempts are scored
 -----------------------
 
 The fitness signal is provided by
-``tests/benchmarks/bfbencher_lib.compare(base, ref)`` (see
+``tests/benchmarks/bfbencher.compare(base, ref)`` (see
 :doc:`tests`). It returns one ``CompareRow`` per benchmark with
 ``delta_time_pct`` and ``delta_insn`` fields. ``bfoptimize`` reduces these
 to a single number:

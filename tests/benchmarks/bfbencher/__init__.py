@@ -1,7 +1,8 @@
-"""bfbencher library — benchmark bpfilter across git commits.
+"""bfbencher — benchmark bpfilter across git commits.
 
-Importable from the CLI shim `bfbencher` (sibling file) and from
-`tools/bfoptimize` for direct programmatic access.
+Runnable as a script (``python -m bfbencher``,
+``python tests/benchmarks/bfbencher``) and importable as a package
+(``from bfbencher import compare``).
 """
 
 from __future__ import annotations

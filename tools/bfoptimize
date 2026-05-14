@@ -525,7 +525,7 @@ def run(config: Config, history: History) -> int:
             sys.path.insert(
                 0, str((config.sources / "tests" / "benchmarks").resolve())
             )
-            from bfbencher_lib import compare
+            from bfbencher import compare
 
             rows = compare(
                 baseline,
