@@ -261,6 +261,38 @@ def _git_head_sha(path: pathlib.Path) -> str:
     ).stdout.strip()
 
 
+def _git_anchor_attempt(
+    sources: pathlib.Path, attempt_id: int, sha: str
+) -> None:
+    """Pin a commit under refs/bfoptimize/<id> so worktree destruction
+    cannot orphan it."""
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(sources),
+            "update-ref",
+            f"refs/bfoptimize/{attempt_id}",
+            sha,
+        ],
+        check=True,
+    )
+
+
+def _weighted_delta(rows: list[Any]) -> float:
+    """Mean delta_time_pct weighted by baseline runtime.
+
+    Slower benchmarks dominate the score: a 10% regression on a 1000ns
+    benchmark outweighs a 10% improvement on a 100ns one.
+    """
+    if not rows:
+        return 0.0
+    total_weight = sum(r.base_time_ns for r in rows)
+    if total_weight == 0:
+        return 0.0
+    return sum(r.delta_time_pct * r.base_time_ns for r in rows) / total_weight
+
+
 def _create_worktree(
     sources: pathlib.Path,
     baseline_sha: str,
@@ -426,12 +458,44 @@ def run(config: Config, history: History) -> int:
             if new_sha is None:
                 attempt["status"] = "rejected_tests"
                 console.log("[yellow]agent did not commit — rejecting attempt[/]")
-            else:
-                attempt["status"] = "applied"
-                attempt["worktree_sha"] = new_sha
+                history.save()
+                continue
+
+            _git_anchor_attempt(config.sources, attempt_id, new_sha)
+            attempt["status"] = "applied"
+            attempt["worktree_sha"] = new_sha
+            history.save()
+            console.log(
+                f"[green]agent committed {new_sha[:SHORT_SHA_LEN]}"
+                f" — running benchmark gate[/]"
+            )
+
+            sys.path.insert(
+                0, str((config.sources / "tests" / "benchmarks").resolve())
+            )
+            from bfbencher_lib import compare
+
+            rows = compare(
+                baseline,
+                new_sha,
+                sources=config.sources,
+                cache_dir=config.cache_dir / "bfbencher",
+            )
+            delta = _weighted_delta(rows)
+            attempt["delta_time_pct"] = delta
+
+            if delta < 0:
+                attempt["status"] = "kept"
+                history.baseline_sha = new_sha
                 console.log(
-                    f"[green]agent committed {new_sha[:SHORT_SHA_LEN]}"
-                    f" — pending benchmark gate[/]"
+                    f"[bold green]kept attempt {attempt_id}: "
+                    f"weighted delta = {delta:+.2f}%, advancing baseline[/]"
+                )
+            else:
+                attempt["status"] = "rejected_benchmark"
+                console.log(
+                    f"[yellow]rejected: weighted delta = {delta:+.2f}% "
+                    f"(no improvement)[/]"
                 )
             history.save()
         finally:
