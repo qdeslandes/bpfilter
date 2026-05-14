@@ -36,8 +36,8 @@ DEFAULT_LAST_COMMIT_REF = "wip"
 DEFAULT_SOURCE_PATH = pathlib.Path(".")
 DEFAULT_CACHE_PATH = pathlib.Path(".cache/bfbencher")
 DEFAULT_USERNAME = getpass.getuser()
-DEFAULT_REPORT_TEMPLATE_PATH = pathlib.Path("tools/benchmarks/results.html.j2")
-DEFAULT_PR_REPORT_TEMPLATE_PATH = pathlib.Path("tools/benchmarks/summary.html.j2")
+DEFAULT_REPORT_TEMPLATE_PATH = pathlib.Path("tests/benchmarks/results.html.j2")
+DEFAULT_PR_REPORT_TEMPLATE_PATH = pathlib.Path("tests/benchmarks/summary.html.j2")
 DEFAULT_HOST = [socket.gethostname(), "localhost"]
 SHORT_SHA_LEN = 7
 
