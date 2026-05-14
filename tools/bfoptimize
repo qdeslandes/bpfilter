@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import dataclasses
 import html
 import json
 import multiprocessing
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
+import threading
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +33,20 @@ SHORT_SHA_LEN = 7
 
 # Map --effort to a thinking budget. Higher effort = more reasoning tokens.
 EFFORT_BUDGETS = {"low": 4000, "medium": 16000, "high": 32000}
+
+# Shared state used by --serve mode. Thread-safe so the run thread can
+# publish log lines while uvicorn (in the main thread) drains them via SSE.
+_LOG_BUFFER: collections.deque[str] = collections.deque(maxlen=1000)
+_LOG_LOCK = threading.Lock()
+_CANCEL_EVENT = threading.Event()
+_RUN_THREAD: threading.Thread | None = None
+_MARKUP_RE = re.compile(r"\[/?[^]]*\]")
+
+
+def _broadcast(line: str) -> None:
+    """Append a plain-text log line to the shared buffer for SSE consumers."""
+    with _LOG_LOCK:
+        _LOG_BUFFER.append(_MARKUP_RE.sub("", line))
 
 
 @dataclasses.dataclass
@@ -424,7 +441,12 @@ def run(config: Config, history: History) -> int:
         )
         return 1
 
-    console = rich.console.Console(log_path=False)
+    class BroadcastConsole(rich.console.Console):
+        def log(self, *objects: Any, **kw: Any) -> None:
+            super().log(*objects, **kw)
+            _broadcast(" ".join(str(o) for o in objects))
+
+    console = BroadcastConsole(log_path=False)
     client = anthropic.Anthropic()
 
     if history.baseline_sha is None:
@@ -435,6 +457,10 @@ def run(config: Config, history: History) -> int:
         )
 
     for i in range(config.iterations):
+        if _CANCEL_EVENT.is_set():
+            console.log("[yellow]cancelled before next iteration[/]")
+            break
+
         attempt_id = history.next_id()
         baseline = history.baseline_sha
         assert baseline is not None
@@ -527,10 +553,18 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <title>bfoptimize</title>
 <style>
 body {{ font-family: system-ui, sans-serif; padding: 2rem; max-width: 80rem; margin: 0 auto; color: #1f2937; }}
-h1 {{ margin-top: 0; }}
+h1, h2 {{ margin-top: 0; }}
+h2 {{ font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; color: #4b5563; margin-top: 2rem; }}
 header {{ display: flex; gap: 2rem; flex-wrap: wrap; align-items: baseline; }}
 header p {{ margin: 0; }}
-table {{ border-collapse: collapse; width: 100%; margin-top: 1.5rem; }}
+#run-form {{ margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }}
+#run-form label {{ display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: #4b5563; }}
+#run-form input, #run-form select {{ padding: 0.35rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }}
+button {{ padding: 0.4rem 0.9rem; border: 1px solid #2563eb; background: #2563eb; color: white; border-radius: 4px; cursor: pointer; font: inherit; }}
+button:disabled {{ background: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }}
+#cancel-btn {{ background: white; color: #b91c1c; border-color: #b91c1c; }}
+#cancel-btn:disabled {{ color: #9ca3af; border-color: #d1d5db; background: white; }}
+table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; }}
 th, td {{ padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
 th {{ background: #f9fafb; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: #4b5563; }}
 td.id {{ font-variant-numeric: tabular-nums; color: #6b7280; }}
@@ -543,77 +577,218 @@ td.id {{ font-variant-numeric: tabular-nums; color: #6b7280; }}
 .delta-pos {{ color: #b91c1c; }}
 code {{ background: #f3f4f6; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }}
 .empty {{ padding: 2rem; text-align: center; color: #9ca3af; }}
+#log {{ background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 6px; max-height: 30rem; overflow: auto; font-size: 0.85rem; white-space: pre-wrap; }}
 </style>
 </head>
 <body>
-<h1>bfoptimize</h1>
-<header>
-<p>Baseline: <code>{baseline}</code></p>
-<p>Attempts: {n_attempts}</p>
-</header>
 {body}
 </body>
 </html>
 """
 
 
-def _render_index(history: History) -> str:
-    baseline = (
-        history.baseline_sha[:SHORT_SHA_LEN]
-        if history.baseline_sha
-        else "unset"
-    )
-    attempts = history.attempts
-    if not attempts:
-        body = '<div class="empty">No attempts yet.</div>'
-    else:
-        rows_html = []
-        for a in attempts:
-            delta = a.get("delta_time_pct")
-            if delta is None:
-                delta_str = "—"
-                delta_cls = ""
-            else:
-                delta_str = f"{delta:+.2f}%"
-                delta_cls = "delta-neg" if delta < 0 else "delta-pos"
-            status = a.get("status", "")
-            rows_html.append(
-                f"<tr>"
-                f"<td class='id'>#{a['id']}</td>"
-                f"<td><span class='status status-{html.escape(status)}'>{html.escape(status)}</span></td>"
-                f"<td class='delta {delta_cls}'>{delta_str}</td>"
-                f"<td>{html.escape(a.get('description', ''))}</td>"
-                f"</tr>"
-            )
-        body = (
-            "<table>"
-            "<thead><tr>"
-            "<th>#</th><th>Status</th><th>Δ time</th><th>Description</th>"
-            "</tr></thead>"
-            f"<tbody>{''.join(rows_html)}</tbody>"
-            "</table>"
-        )
+INDEX_BODY = """<h1>bfoptimize</h1>
+<header>
+<p>Baseline: <code id="baseline">unset</code></p>
+<p>Attempts: <span id="n-attempts">0</span></p>
+<p>Run: <span id="run-state">idle</span></p>
+</header>
+
+<form id="run-form">
+<label>Iterations <input name="iterations" type="number" min="1" value="10"></label>
+<label>Model <input name="model" type="text" value="{default_model}"></label>
+<label>Effort
+<select name="effort">
+<option>low</option>
+<option selected>medium</option>
+<option>high</option>
+</select>
+</label>
+<label>Hint <input name="hint" type="text" placeholder="optional"></label>
+<button type="submit" id="start-btn">Start run</button>
+<button type="button" id="cancel-btn" disabled>Cancel</button>
+</form>
+
+<section id="attempts">
+<table>
+<thead><tr><th>#</th><th>Status</th><th>Δ time</th><th>Description</th></tr></thead>
+<tbody id="attempts-body"></tbody>
+</table>
+<div id="empty" class="empty">No attempts yet.</div>
+</section>
+
+<section id="logs">
+<h2>Live log</h2>
+<pre id="log"></pre>
+</section>
+
+<script>
+async function refreshHistory() {{
+  const r = await fetch('/api/history');
+  const data = await r.json();
+  document.getElementById('baseline').textContent =
+    data.baseline_sha ? data.baseline_sha.slice(0, 7) : 'unset';
+  document.getElementById('n-attempts').textContent = data.attempts.length;
+  const body = document.getElementById('attempts-body');
+  body.innerHTML = '';
+  for (const a of data.attempts) {{
+    const tr = document.createElement('tr');
+    const delta = a.delta_time_pct;
+    const deltaStr = delta == null ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(2) + '%';
+    const deltaCls = delta == null ? '' : (delta < 0 ? 'delta-neg' : 'delta-pos');
+    tr.innerHTML =
+      `<td class="id">#${{a.id}}</td>` +
+      `<td><span class="status status-${{a.status}}">${{a.status}}</span></td>` +
+      `<td class="delta ${{deltaCls}}">${{deltaStr}}</td>` +
+      `<td></td>`;
+    tr.querySelector('td:last-child').textContent = a.description || '';
+    body.appendChild(tr);
+  }}
+  document.getElementById('empty').style.display =
+    data.attempts.length ? 'none' : 'block';
+}}
+
+async function refreshState() {{
+  const r = await fetch('/api/state');
+  const data = await r.json();
+  document.getElementById('run-state').textContent = data.running ? 'running' : 'idle';
+  document.getElementById('start-btn').disabled = data.running;
+  document.getElementById('cancel-btn').disabled = !data.running;
+}}
+
+const evt = new EventSource('/api/stream');
+const logEl = document.getElementById('log');
+evt.onmessage = (e) => {{
+  logEl.textContent += e.data + '\\n';
+  logEl.scrollTop = logEl.scrollHeight;
+  refreshHistory();
+  refreshState();
+}};
+
+document.getElementById('run-form').addEventListener('submit', async (e) => {{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = {{
+    iterations: parseInt(fd.get('iterations')),
+    model: fd.get('model'),
+    effort: fd.get('effort'),
+    hint: fd.get('hint') || null,
+  }};
+  const r = await fetch('/api/run', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(body),
+  }});
+  if (!r.ok) {{
+    const msg = await r.text();
+    alert('Failed to start: ' + msg);
+  }}
+  refreshState();
+}});
+
+document.getElementById('cancel-btn').addEventListener('click', async () => {{
+  await fetch('/api/run', {{method: 'DELETE'}});
+  refreshState();
+}});
+
+refreshHistory();
+refreshState();
+setInterval(refreshState, 2000);
+</script>
+"""
+
+
+def _render_index() -> str:
     return INDEX_TEMPLATE.format(
-        baseline=html.escape(baseline),
-        n_attempts=len(attempts),
-        body=body,
+        baseline="",
+        n_attempts="",
+        body=INDEX_BODY.format(default_model=html.escape(DEFAULT_MODEL)),
     )
 
 
 def _make_app(config: Config) -> Any:
-    from fastapi import FastAPI
-    from fastapi.responses import HTMLResponse
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse, StreamingResponse
+    from pydantic import BaseModel
+
+    class RunRequest(BaseModel):
+        iterations: int = DEFAULT_ITERATIONS
+        sources: str | None = None
+        build_dir: str | None = None
+        cache_dir: str | None = None
+        model: str = DEFAULT_MODEL
+        effort: str = DEFAULT_EFFORT
+        hint: str | None = None
+        propose_only: bool = False
 
     app = FastAPI(title="bfoptimize")
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _render_index(History(config.cache_dir))
+        return _render_index()
 
     @app.get("/api/history")
     def api_history() -> dict[str, Any]:
         h = History(config.cache_dir)
         return {"baseline_sha": h.baseline_sha, "attempts": h.attempts}
+
+    @app.get("/api/state")
+    def api_state() -> dict[str, bool]:
+        return {"running": _RUN_THREAD is not None and _RUN_THREAD.is_alive()}
+
+    @app.post("/api/run", status_code=202)
+    def api_start_run(body: RunRequest) -> dict[str, str]:
+        global _RUN_THREAD
+        if _RUN_THREAD is not None and _RUN_THREAD.is_alive():
+            raise HTTPException(409, "already running")
+
+        run_config = dataclasses.replace(
+            config,
+            iterations=body.iterations,
+            sources=pathlib.Path(body.sources) if body.sources else config.sources,
+            build_dir=pathlib.Path(body.build_dir)
+            if body.build_dir
+            else config.build_dir,
+            cache_dir=pathlib.Path(body.cache_dir)
+            if body.cache_dir
+            else config.cache_dir,
+            model=body.model,
+            effort=body.effort,
+            hint=body.hint,
+            propose_only=body.propose_only,
+        )
+        history = History(run_config.cache_dir)
+
+        _CANCEL_EVENT.clear()
+        with _LOG_LOCK:
+            _LOG_BUFFER.clear()
+        _RUN_THREAD = threading.Thread(
+            target=run, args=(run_config, history), daemon=True
+        )
+        _RUN_THREAD.start()
+        return {"status": "started"}
+
+    @app.delete("/api/run")
+    def api_cancel_run() -> dict[str, str]:
+        if _RUN_THREAD is None or not _RUN_THREAD.is_alive():
+            raise HTTPException(404, "no run in progress")
+        _CANCEL_EVENT.set()
+        return {"status": "cancelling"}
+
+    @app.get("/api/stream")
+    async def api_stream() -> StreamingResponse:
+        async def gen() -> Any:
+            last_idx = 0
+            while True:
+                with _LOG_LOCK:
+                    buf_len = len(_LOG_BUFFER)
+                    new = list(_LOG_BUFFER)[last_idx:]
+                    last_idx = buf_len
+                for line in new:
+                    yield f"data: {line}\n\n"
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     return app
 
