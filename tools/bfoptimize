@@ -10,12 +10,14 @@ import dataclasses
 import html
 import json
 import multiprocessing
+import os
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import traceback
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -426,6 +428,15 @@ async def execute_in_worktree(
 
 def run(config: Config, history: History) -> int:
     """Optimization loop."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        msg = (
+            "ANTHROPIC_API_KEY is not set. Export it in the shell that "
+            "launched bfoptimize and try again."
+        )
+        print(f"error: {msg}", file=sys.stderr)
+        _broadcast(f"[error] {msg}")
+        return 1
+
     try:
         import anthropic
         import rich.console
@@ -436,6 +447,7 @@ def run(config: Config, history: History) -> int:
             f"pip install -r tools/bfoptimize.requirements.txt",
             file=sys.stderr,
         )
+        _broadcast(f"[error] missing dependency: {e}")
         return 1
 
     class BroadcastConsole(rich.console.Console):
@@ -769,9 +781,16 @@ def _make_app(config: Config) -> Any:
         _CANCEL_EVENT.clear()
         with _LOG_LOCK:
             _LOG_BUFFER.clear()
-        _RUN_THREAD = threading.Thread(
-            target=run, args=(run_config, history), daemon=True
-        )
+
+        def _thread_target() -> None:
+            try:
+                run(run_config, history)
+            except Exception as e:
+                tb = traceback.format_exc()
+                print(tb, file=sys.stderr)
+                _broadcast(f"[error] {type(e).__name__}: {e}")
+
+        _RUN_THREAD = threading.Thread(target=_thread_target, daemon=True)
         _RUN_THREAD.start()
         return {"status": "started"}
 
