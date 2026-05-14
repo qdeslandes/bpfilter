@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import dataclasses
 import json
+import multiprocessing
 import pathlib
+import shutil
+import subprocess
 import sys
 from typing import Any, TYPE_CHECKING
 
@@ -248,8 +252,118 @@ Output only the optimization proposal — no code yet."""
     return next(b.text for b in response.content if b.type == "text")
 
 
+def _git_head_sha(path: pathlib.Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _create_worktree(
+    sources: pathlib.Path,
+    baseline_sha: str,
+    worktree: pathlib.Path,
+) -> None:
+    """Create a detached worktree at baseline_sha at the given path."""
+    if worktree.exists():
+        subprocess.run(
+            ["git", "-C", str(sources), "worktree", "remove", "-f", str(worktree)],
+            check=False,
+        )
+        shutil.rmtree(worktree, ignore_errors=True)
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(sources),
+            "worktree",
+            "add",
+            "--detach",
+            str(worktree),
+            baseline_sha,
+        ],
+        check=True,
+    )
+
+
+def _destroy_worktree(sources: pathlib.Path, worktree: pathlib.Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(sources), "worktree", "remove", "-f", str(worktree)],
+        check=False,
+    )
+    shutil.rmtree(worktree, ignore_errors=True)
+
+
+async def execute_in_worktree(
+    config: Config,
+    plan: str,
+    worktree: pathlib.Path,
+    baseline_sha: str,
+    console: "rich.console.Console",
+) -> str | None:
+    """Run the agent inside the worktree to apply, build and test the plan.
+
+    Returns the new HEAD SHA if the agent committed, else None.
+    """
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        ResultMessage,
+        TextBlock,
+        query,
+    )
+
+    abs_wt = worktree.resolve()
+    abs_build = abs_wt / "build"
+    ncpus = multiprocessing.cpu_count()
+
+    prompt = f"""You are implementing a performance optimization to the bpfilter BPF bytecode generator.
+
+## Optimization to implement
+
+{plan}
+
+## Rules
+
+- Modify ONLY files under `{abs_wt}/{CGEN_DIR}/`. Do not touch any other path.
+- Build with:
+    cmake -S {abs_wt} -B {abs_build} -DNO_DOCS=1 -DCMAKE_BUILD_TYPE=release
+    make -C {abs_build} -j{ncpus} test_bin
+- Test with:
+    make -C {abs_build} -j{ncpus} test
+- If both build and tests pass: commit with
+    git -C {abs_wt} commit -am "lib: cgen: <one-line summary of the change>"
+- If build or tests fail: diagnose and fix. If you cannot make tests pass,
+  revert your changes with
+    git -C {abs_wt} checkout -- {abs_wt}/{CGEN_DIR}/
+  and exit without committing.
+- The baseline is {baseline_sha[:SHORT_SHA_LEN]}. Only commit when tests are
+  green. The orchestrator inspects HEAD after you exit."""
+
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            cwd=str(abs_wt),
+            permission_mode="bypassPermissions",
+            allowed_tools=["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+        ),
+    ):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text.strip():
+                    console.log(f"[dim]{block.text.strip()[:200]}[/dim]")
+        elif isinstance(message, ResultMessage) and message.result:
+            console.log(f"agent done: {message.result[:200]}")
+
+    new_sha = _git_head_sha(worktree)
+    return new_sha if new_sha != baseline_sha else None
+
+
 def run(config: Config, history: History) -> int:
-    """Optimization loop. Currently only the proposal stage is wired."""
+    """Optimization loop."""
     try:
         import anthropic
         import rich.console
@@ -265,10 +379,20 @@ def run(config: Config, history: History) -> int:
     console = rich.console.Console(log_path=False)
     client = anthropic.Anthropic()
 
+    if history.baseline_sha is None:
+        history.baseline_sha = _git_head_sha(config.sources)
+        history.save()
+        console.log(
+            f"baseline initialized to {history.baseline_sha[:SHORT_SHA_LEN]}"
+        )
+
     for i in range(config.iterations):
         attempt_id = history.next_id()
+        baseline = history.baseline_sha
+        assert baseline is not None
         console.log(
-            f"[bold]Attempt {attempt_id} ({i + 1}/{config.iterations})[/]"
+            f"[bold]Attempt {attempt_id} ({i + 1}/{config.iterations})"
+            f" — baseline {baseline[:SHORT_SHA_LEN]}[/]"
         )
 
         plan_text = plan_optimization(client, console, config, history)
@@ -277,21 +401,41 @@ def run(config: Config, history: History) -> int:
             "",
         )
 
-        history.add_attempt(
-            {
-                "id": attempt_id,
-                "status": "proposed",
-                "description": description,
-                "plan": plan_text,
-                "delta_time_pct": None,
-            }
-        )
+        attempt: dict[str, Any] = {
+            "id": attempt_id,
+            "status": "proposed",
+            "description": description,
+            "plan": plan_text,
+            "baseline_sha": baseline,
+            "delta_time_pct": None,
+        }
+        history.add_attempt(attempt)
 
         if config.propose_only:
             console.log(
                 "[yellow]--propose-only: stopping after recording proposal[/]"
             )
             break
+
+        worktree = config.cache_dir / "worktrees" / f"attempt-{attempt_id}"
+        try:
+            _create_worktree(config.sources, baseline, worktree)
+            new_sha = asyncio.run(
+                execute_in_worktree(config, plan_text, worktree, baseline, console)
+            )
+            if new_sha is None:
+                attempt["status"] = "rejected_tests"
+                console.log("[yellow]agent did not commit — rejecting attempt[/]")
+            else:
+                attempt["status"] = "applied"
+                attempt["worktree_sha"] = new_sha
+                console.log(
+                    f"[green]agent committed {new_sha[:SHORT_SHA_LEN]}"
+                    f" — pending benchmark gate[/]"
+                )
+            history.save()
+        finally:
+            _destroy_worktree(config.sources, worktree)
 
     return 0
 
