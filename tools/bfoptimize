@@ -703,12 +703,15 @@ def _render_index() -> str:
     )
 
 
-def _make_app(config: Config) -> Any:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse, StreamingResponse
-    from pydantic import BaseModel
+# RunRequest must live at module scope: FastAPI resolves the body annotation
+# via typing.get_type_hints(handler), which only looks at module globals. A
+# class defined inside _make_app() would not be reachable from there and
+# FastAPI would silently fall back to treating `body` as a query parameter.
+# The pydantic import is wrapped so --dry-run still works without the deps.
+try:
+    from pydantic import BaseModel as _PydanticBase
 
-    class RunRequest(BaseModel):
+    class RunRequest(_PydanticBase):
         iterations: int = DEFAULT_ITERATIONS
         sources: str | None = None
         build_dir: str | None = None
@@ -717,6 +720,13 @@ def _make_app(config: Config) -> Any:
         effort: str = DEFAULT_EFFORT
         hint: str | None = None
         propose_only: bool = False
+except ImportError:
+    RunRequest = None  # type: ignore[assignment,misc]
+
+
+def _make_app(config: Config) -> Any:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse, StreamingResponse
 
     app = FastAPI(title="bfoptimize")
 
