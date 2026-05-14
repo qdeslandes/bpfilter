@@ -20,6 +20,7 @@
    developers/packets_processing
    developers/generation
    developers/tests
+   developers/bfoptimize
 
 .. toctree::
    :hidden:
