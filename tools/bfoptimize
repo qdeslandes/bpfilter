@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -836,8 +837,41 @@ def serve(config: Config) -> int:
         f"bfoptimize serving on http://0.0.0.0:{config.port} (all interfaces)",
         file=sys.stderr,
     )
-    uvicorn.run(app, host="0.0.0.0", port=config.port, log_level="warning")
+    # timeout_graceful_shutdown=2: the SSE /api/stream handler never returns
+    # naturally, so don't make Ctrl+C wait for the default 5s timeout.
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=config.port,
+        log_level="warning",
+        timeout_graceful_shutdown=2,
+    )
     return 0
+
+
+def _install_cli_sigint_handler() -> None:
+    """First Ctrl+C: set cancel flag and message. Second: force exit.
+
+    Python defers KeyboardInterrupt during blocking C-level reads (e.g. the
+    anthropic streaming socket), so a single Ctrl+C can appear to hang. The
+    second SIGINT short-circuits with os._exit so the user always has an
+    escape hatch.
+    """
+    armed = [False]
+
+    def handler(signum: int, frame: Any) -> None:
+        if armed[0]:
+            print("\nforcing exit", file=sys.stderr)
+            os._exit(130)
+        armed[0] = True
+        _CANCEL_EVENT.set()
+        print(
+            "\ncaught Ctrl+C, finishing current step "
+            "(press again to force quit)",
+            file=sys.stderr,
+        )
+
+    signal.signal(signal.SIGINT, handler)
 
 
 def main() -> int:
@@ -852,9 +886,15 @@ def main() -> int:
         return 0
 
     if config.serve:
+        # uvicorn installs its own SIGINT handler — don't fight it.
         return serve(config)
 
-    return run(config, history)
+    _install_cli_sigint_handler()
+    try:
+        return run(config, history)
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
