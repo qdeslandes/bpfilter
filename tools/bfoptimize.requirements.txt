@@ -1,0 +1,12 @@
+anthropic>=0.40
+rich>=13
+fastapi>=0.111
+uvicorn[standard]>=0.29
+
+# bfbencher dependencies (required unless --no-benchmark is used)
+diskcache
+gitpython
+jinja2
+numpy
+paramiko
+pint
