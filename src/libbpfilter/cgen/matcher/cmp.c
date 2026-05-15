@@ -56,25 +56,28 @@ static inline uint64_t _bf_read_u64(const void *ptr)
 }
 
 /**
- * @brief Emit a 4-instruction sequence to build a 64-bit immediate from 8 bytes.
+ * @brief Emit a wide `BPF_LD_IMM64` instruction to load a 64-bit immediate.
  *
- * Produces:
- * @code
- * MOV32_IMM(dst, high32) -> LSH(dst, 32) -> MOV32_IMM(scratch, low32) -> OR(dst, scratch)
- * @endcode
+ * `BPF_LD_IMM64` occupies two `struct bpf_insn` slots in the program image
+ * but executes as a single load on JITed code (e.g. one `movabs` on x86-64;
+ * one `mov`/`movk` pair on arm64). This replaces a 4-instruction
+ * `MOV32_IMM` / `LSH64` / `MOV32_IMM` / `OR64` sequence that previously
+ * needed a scratch register.
  *
  * @param program Program to emit into. Can't be NULL.
  * @param dst_reg Destination register for the 64-bit value.
- * @param scratch_reg Scratch register (clobbered).
+ * @param scratch_reg Unused; kept for call-site stability.
  * @param data 64-bit value to load.
  */
 static int _bf_cmp_build_imm64(struct bf_program *program, int dst_reg,
                                int scratch_reg, uint64_t data)
 {
-    EMIT(program, BPF_MOV32_IMM(dst_reg, (uint32_t)(data >> 32)));
-    EMIT(program, BPF_ALU64_IMM(BPF_LSH, dst_reg, 32));
-    EMIT(program, BPF_MOV32_IMM(scratch_reg, (uint32_t)data));
-    EMIT(program, BPF_ALU64_REG(BPF_OR, dst_reg, scratch_reg));
+    const struct bpf_insn ld_insn[2] = {BPF_LD_IMM64(dst_reg, data)};
+
+    (void)scratch_reg;
+
+    EMIT(program, ld_insn[0]);
+    EMIT(program, ld_insn[1]);
 
     return 0;
 }
