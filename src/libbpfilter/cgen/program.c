@@ -882,21 +882,44 @@ int bf_program_generate(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
 
-    // Reset the protocol ID registers
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+    /* r7 (the L3 proto id) is unconditionally overwritten by every
+     * flavor's prologue before any consumer reads it:
+     *  - TC/XDP load r7 from ethhdr.h_proto in `bf_stub_parse_l2_ethhdr`
+     *    on the success path; the failure path EXITs without touching r7.
+     *  - cgroup_skb / nf write r7 in the family/pf swich, including the
+     *    default body (`MOV r7, 0`).
+     * Nothing between this point and the prologue reads r7 — the
+     * STORE_NEXTHDR ipv6_eh block below uses an immediate store instead
+     * of `STX r7`, removing the last r7 dependence. The defensive
+     * `MOV r7=0` reset that used to live here is therefore dead and has
+     * been elided.
+     *
+     * r8 (the L4 proto id) is consumed by the L4 stub's swich, by
+     * `bf_stub_rule_check_protocol()` for L4-layer matchers, and by
+     * `meta.l4_proto` matchers — all of which flag `any_l4 = true` in
+     * `_bf_stub_account_matcher_type()`. When the chain has no such
+     * consumer (and no `BF_CHAIN_STORE_NEXTHDR` flag — see
+     * `bf_stub_l4_used`), no code path in the generated program reads
+     * r8, so the reset is dead. Otherwise it must remain: non-IPv4/IPv6
+     * packets reach the L4 stub via the L3 stub's default-exit without
+     * having written r8. */
+    if (bf_stub_l4_used(chain))
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
 
     // If at least one rule logs the matched packets, populate ctx->log_map
-    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+    if (chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
         EMIT_LOAD_LOG_FD_FIXUP(program, BPF_REG_2);
         EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2,
                                   BF_PROG_CTX_OFF(log_map)));
     }
 
-    // Zeroing IPv6 extension headers
-    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR)) {
-        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_7,
-                                  BF_PROG_CTX_OFF(ipv6_eh)));
+    /* Zero `ctx->ipv6_eh` with an immediate store. The previous
+     * `STX r7` form only worked because r7 had just been zeroed; now
+     * that the MOV r7=0 is gone, use ST_MEM imm 0 — same instruction
+     * count, no register dependency. */
+    if (chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR)) {
+        EMIT(program,
+             BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(ipv6_eh), 0));
     }
 
     r = program->runtime.ops->gen_inline_prologue(program);

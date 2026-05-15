@@ -130,6 +130,35 @@ bool bf_stub_l3_offset_needed_in_ctx(const struct bf_chain *chain);
 bool bf_stub_ifindex_needed_in_ctx(const struct bf_chain *chain);
 
 /**
+ * @brief Whether the generated program will ever read register r8
+ *        (the L4 protocol id).
+ *
+ * r8 is consumed by:
+ * - `bf_stub_parse_l3_hdr()`'s IPv4/IPv6 inner blocks, which write r8
+ *   from `iphdr.protocol` or `ipv6hdr.nexthdr`.
+ * - `bf_stub_parse_l4_hdr()`'s swich on the L4 protocol id.
+ * - `bf_stub_rule_check_protocol()` for L4-layer matchers (`JNE r8, ...`).
+ * - `meta.l4_proto` matchers via `bf_cmp_value(..., BPF_REG_8, 1)`.
+ * - `bf_packet_gen_inline_log()` packs r7/r8 into r5 to pass the
+ *   (l3_proto, l4_proto) pair to `BF_ELFSTUB_PKT_LOG`. Every rule with
+ *   `rule->log` set causes `BF_CHAIN_LOG` to be set on the chain, so
+ *   that flag is treated as an r8 consumer here.
+ *
+ * Matcher-side consumers trigger `out->any_l4 = true` in
+ * `_bf_stub_account_matcher_type()`. The `BF_CHAIN_STORE_NEXTHDR` flag
+ * is also OR-ed in for parity with `_bf_stub_need_ip6_l4_prep()`: when
+ * that flag is set, the IPv6 block of the L3 stub is emitted and writes
+ * r8 from `ipv6hdr.nexthdr`. When none of these conditions hold, no code
+ * path in the generated program reads r8, so the defensive `MOV r8=0`
+ * reset emitted by `bf_program_generate()` is dead and can be elided.
+ *
+ * @param chain Chain to inspect. Must not be NULL.
+ * @return true if any code path in the generated program reads r8,
+ *         false if the r8 reset can be elided.
+ */
+bool bf_stub_l4_used(const struct bf_chain *chain);
+
+/**
  * @brief Emit the instructions to check if the packet contains a specific
  *        protocol.
  *

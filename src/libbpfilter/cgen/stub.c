@@ -314,6 +314,44 @@ bool bf_stub_ifindex_needed_in_ctx(const struct bf_chain *chain)
 }
 
 /**
+ * @brief Whether the generated program ever reads register r8 (the L4
+ *        protocol id), and therefore whether the defensive `MOV r8=0`
+ *        reset in `bf_program_generate()` must be kept.
+ *
+ * The readers of r8 anywhere in the codegen are:
+ * - The L4-stub swich on `BPF_REG_8` (gated by `used.tcp | udp | icmp |
+ *   icmpv6`, all of which set `out->any_l4 = true`).
+ * - `bf_stub_rule_check_protocol()` for L4-layer matchers (`JNE r8, …`),
+ *   which by construction only fires when an L4-layer matcher exists.
+ * - `meta.l4_proto` matchers via `bf_cmp_value(..., BPF_REG_8, 1)`, which
+ *   force `any_l4 = true` in `_bf_stub_account_matcher_type()`.
+ * - `bf_packet_gen_inline_log()` packs r7/r8 into r5 to pass the
+ *   (l3_proto, l4_proto) pair to `BF_ELFSTUB_PKT_LOG`. The corresponding
+ *   `_bf_cgroup_sock_addr_gen_inline_log()` does the same. Every rule
+ *   with `rule->log` set causes `BF_CHAIN_LOG` to be set on the chain
+ *   (`_bf_chain_check_rule()`), so that flag is treated as an r8
+ *   consumer here. Without keeping the reset, an L3-only logging chain
+ *   (e.g. `rule ip4.proto icmp log DROP`) would feed an uninitialized
+ *   r8 to the log elfstub and the verifier would reject the program.
+ *
+ * `BF_CHAIN_STORE_NEXTHDR` is OR-ed in for parity with
+ * `_bf_stub_need_ip6_l4_prep()`: when that flag is set, the IPv6 block
+ * of the L3 stub is emitted and writes r8 from `ipv6hdr.nexthdr`. In
+ * practice the flag already implies `any_l4 = true` (an `ipv6.nexthdr`
+ * matcher is L4-layer), but ORing both is belt-and-braces.
+ */
+bool bf_stub_l4_used(const struct bf_chain *chain)
+{
+    struct bf_proto_used used;
+
+    assert(chain);
+
+    _bf_stub_collect_proto_used(chain, &used);
+    return used.any_l4 || (chain->flags & (BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
+                                           BF_FLAG(BF_CHAIN_LOG)));
+}
+
+/**
  * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
  * given program flavor.
  *
