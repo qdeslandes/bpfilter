@@ -629,11 +629,9 @@ static int _bf_program_generate_rule(struct bf_program *program,
     }
 
     if (rule->has_counters) {
-        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-        EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-        EMIT(program, BPF_MOV32_IMM(BPF_REG_3, rule->index));
-        EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+        r = bf_program_emit_update_counters(program, rule->index);
+        if (r)
+            return r;
     }
 
     switch (rule->verdict) {
@@ -820,6 +818,56 @@ int bf_program_emit_fixup_elfstub(struct bf_program *program,
     return 0;
 }
 
+int bf_program_emit_update_counters(struct bf_program *program,
+                                    uint32_t counter_idx)
+{
+    assert(program);
+
+    /* Stash the key (counter_idx, u32) into the scratch area so we can
+     * pass `&key` to `bpf_map_lookup_elem`. The counter map's key size
+     * is `sizeof(uint32_t)`, so only these 4 bytes are read by the
+     * helper. */
+    EMIT(program,
+         BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_SCR_OFF(0), counter_idx));
+
+    /* r1 = counters map fd (LD_IMM64 + fixup, 2 insns). */
+    EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_1);
+
+    /* r2 = &scratch[0] (the key). */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_2, BPF_REG_10));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, BF_PROG_SCR_OFF(0)));
+
+    /* r0 = bpf_map_lookup_elem(map, &key) */
+    EMIT(program, BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem));
+
+    {
+        /* On lookup miss, skip the field updates. The jmpctx fixes up
+         * the offset to land past the last STX below. The elfstub's
+         * `bpf_printk` error log is intentionally dropped: it was dead
+         * code on the verifier hot path and not observable to chains. */
+        _clean_bf_jmpctx_ struct bf_jmpctx _ =
+            bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
+
+        /* counter->count += 1 */
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0,
+                                  offsetof(struct bf_counter, count)));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1));
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1,
+                                  offsetof(struct bf_counter, count)));
+
+        /* counter->size += ctx->pkt_size */
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10,
+                                  BF_PROG_CTX_OFF(pkt_size)));
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_0,
+                                  offsetof(struct bf_counter, size)));
+        EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_1));
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_0, BPF_REG_2,
+                                  offsetof(struct bf_counter, size)));
+    }
+
+    return 0;
+}
+
 int bf_program_generate(struct bf_program *program)
 {
     const struct bf_chain *chain = program->runtime.chain;
@@ -880,14 +928,13 @@ int bf_program_generate(struct bf_program *program)
     if (r)
         return r;
 
-    // Call the update counters function
-    /// @todo Allow chains to have no counters at all.
-    EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-    EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-    EMIT(program,
-         BPF_MOV32_IMM(BPF_REG_3, bf_program_chain_counter_idx(program)));
-    EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+    /* Chain policy counter: hit on every packet that didn't already
+     * exit through a rule's verdict.
+     * @todo Allow chains to have no counters at all. */
+    r = bf_program_emit_update_counters(program,
+                                        bf_program_chain_counter_idx(program));
+    if (r)
+        return r;
 
     r = program->runtime.ops->get_verdict(chain->policy, &ret_code);
     if (r)

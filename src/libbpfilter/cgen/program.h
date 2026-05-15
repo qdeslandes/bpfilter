@@ -299,6 +299,35 @@ int bf_program_emit_fixup(struct bf_program *program, enum bf_fixup_type type,
                           const union bf_fixup_attr *attr);
 int bf_program_emit_fixup_elfstub(struct bf_program *program,
                                   enum bf_elfstub_id id);
+
+/**
+ * @brief Emit an inline counter-update sequence at the current program
+ *        point.
+ *
+ * Replaces the BF_ELFSTUB_UPDATE_COUNTERS subprogram call with inline
+ * code: looks up the counter at `counter_idx` in the counters map and
+ * increments `count` by 1 and `size` by `ctx->pkt_size`. On lookup
+ * failure the update is silently skipped (the elfstub's `bpf_printk`
+ * error log is dropped; it was not observable to chains anyway).
+ *
+ * Inlining is universally cheaper than going through a BPF subprogram
+ * call: the chain-policy counter update runs on every packet's hot path
+ * and the elfstub itself is ~18 instructions including dead-code error
+ * paths, prologue, epilogue and the call-frame overhead. The inline
+ * sequence is 13 instructions and avoids the BPF subprog call entirely.
+ *
+ * Clobbers @c r0 , @c r1 , @c r2 and the first 4 bytes of the scratch
+ * area (`BF_PROG_SCR_OFF(0..3)`). Preserves @c r6 - @c r9
+ * (`bpf_map_lookup_elem` only clobbers @c r0 - @c r5 ).
+ *
+ * @param program Program to emit into. Can't be NULL.
+ * @param counter_idx Index of the counter to update. Used as the key for
+ *        the lookup in the counters map.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+int bf_program_emit_update_counters(struct bf_program *program,
+                                    uint32_t counter_idx);
+
 int bf_program_generate(struct bf_program *program);
 
 /**

@@ -335,12 +335,10 @@ static int _bf_stub_make_ctx_dynptr(struct bf_program *program, int arg_reg,
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
 
         // Update the error counter
-        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-        EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-        EMIT(program,
-             BPF_MOV32_IMM(BPF_REG_3, bf_program_error_counter_idx(program)));
-        EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+        r = bf_program_emit_update_counters(
+            program, bf_program_error_counter_idx(program));
+        if (r)
+            return r;
 
         if (bf_ctx_is_verbose(BF_VERBOSE_BPF))
             EMIT_PRINT(program, "failed to create a new dynamic pointer");
@@ -404,12 +402,10 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
 
         // Update the error counter
-        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-        EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-        EMIT(program,
-             BPF_MOV32_IMM(BPF_REG_3, bf_program_error_counter_idx(program)));
-        EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+        r = bf_program_emit_update_counters(
+            program, bf_program_error_counter_idx(program));
+        if (r)
+            return r;
 
         if (bf_ctx_is_verbose(BF_VERBOSE_BPF))
             EMIT_PRINT(program, "failed to create L2 dynamic pointer slice");
@@ -527,12 +523,10 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
 
-        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-        EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-        EMIT(program,
-             BPF_MOV32_IMM(BPF_REG_3, bf_program_error_counter_idx(program)));
-        EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+        r = bf_program_emit_update_counters(
+            program, bf_program_error_counter_idx(program));
+        if (r)
+            return r;
 
         if (bf_ctx_is_verbose(BF_VERBOSE_BPF))
             EMIT_PRINT(program, "failed to create L3 dynamic pointer slice");
@@ -724,12 +718,10 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
 
-        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
-        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
-        EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);
-        EMIT(program,
-             BPF_MOV32_IMM(BPF_REG_3, bf_program_error_counter_idx(program)));
-        EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
+        r = bf_program_emit_update_counters(
+            program, bf_program_error_counter_idx(program));
+        if (r)
+            return r;
 
         if (bf_ctx_is_verbose(BF_VERBOSE_BPF))
             EMIT_PRINT(program, "failed to create L4 dynamic pointer slice");
