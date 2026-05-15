@@ -199,6 +199,45 @@ static void _bf_stub_collect_proto_used(const struct bf_chain *chain,
 }
 
 /**
+ * @brief Whether the IPv4 block of `bf_stub_parse_l3_hdr()` must still
+ *        compute `l4_offset` (from `iphdr.ihl`) and load `r8 = iphdr.protocol`.
+ *
+ * The IPv4 block's only externally observable effects are setting `r8`
+ * (the L4 proto id) and writing `bf_runtime.l4_offset`. Both are consumed
+ * exclusively by L4-aware matchers and by `bf_stub_parse_l4_hdr()`, all
+ * of which set `any_l4 = true` in `_bf_stub_account_matcher_type()`.
+ *
+ * When no L4 matcher exists, the entire IPv4 block — including its
+ * `JNE r7, ETH_P_IP` guard — is pure dead code on the hot path and can
+ * be elided. L3 IPv4 matchers (`ip.saddr`, `ip.daddr`, sets keyed on IP)
+ * read the sliced header from `bf_runtime.l3_hdr`, which is populated
+ * earlier in this function, so they are unaffected.
+ */
+static inline bool _bf_stub_need_ip4_l4_prep(const struct bf_proto_used *used)
+{
+    return used->any_l4;
+}
+
+/**
+ * @brief Whether the IPv6 block of `bf_stub_parse_l3_hdr()` must still
+ *        load `r8 = ipv6hdr.nexthdr`, run the EH-detection cascade, and
+ *        write `bf_runtime.l4_offset`.
+ *
+ * Like the IPv4 case, the IPv6 block's only externally observable
+ * effects are setting `r8` and writing `l4_offset`. Additionally, when
+ * `BF_CHAIN_STORE_NEXTHDR` is set, the EH parser stores nexthdr meta
+ * via `BF_ELFSTUB_PARSE_IPV6_NH` for later `ipv6.nexthdr` matchers; in
+ * practice `STORE_NEXTHDR` already implies `any_l4 = true` (since
+ * `ipv6.nexthdr` is an L4-layer matcher) but we OR both conditions to
+ * be conservative.
+ */
+static inline bool _bf_stub_need_ip6_l4_prep(const struct bf_proto_used *used,
+                                             const struct bf_chain *chain)
+{
+    return used->any_l4 || (chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR));
+}
+
+/**
  * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
  * given program flavor.
  *
@@ -451,9 +490,12 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 
     /* Unsupported L3 protocols have been filtered out at the beginning of this
      * function and would jump over the block below, so there is no need to
-     * worry about them here. Each branch is emitted only if the chain
-     * actually filters on that L3 protocol. */
-    if (used.ip4) {
+     * worry about them here. Each per-family block below is emitted only if
+     * the chain actually filters on that L3 protocol *and* needs the L4
+     * proto id / l4_offset prepared for downstream consumers (the L4 stub
+     * or any L4-layer matcher). For L3-only filtering chains the entire
+     * block — including the inner JNE guard — is elided. */
+    if (used.ip4 && _bf_stub_need_ip4_l4_prep(&used)) {
         // IPv4
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
@@ -474,7 +516,7 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
                                   offsetof(struct iphdr, protocol)));
     }
 
-    if (used.ip6) {
+    if (used.ip6 && _bf_stub_need_ip6_l4_prep(&used, program->runtime.chain)) {
         // IPv6
         struct bf_jmpctx tcpjmp, udpjmp, noehjmp, ehjmp;
         struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, _BF_LOW_EH_BITMASK)};
