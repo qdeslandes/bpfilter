@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <bpfilter/logger.h>
@@ -128,13 +129,17 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
         break;
     }
     case 4: {
-        /* 32-bit values: may exceed signed 32-bit immediate range, so
-         * use MOV32_IMM into R2 + JMP_REG. */
+        /* 32-bit values: use BPF_JMP32_IMM, which performs a 32-bit
+         * compare against the immediate without sign-extending the
+         * register to 64 bits. This is bit-identical to MOV32_IMM into
+         * a scratch register followed by BPF_JMP_REG for BPF_JEQ/JNE
+         * (the only ops emitted here), but saves one instruction and
+         * avoids a scratch register def/use. The register was loaded
+         * via BPF_LDX_MEM(BPF_W, ...) and is zero-extended. */
         uint32_t val = *(const uint32_t *)ref;
 
-        EMIT(program, BPF_MOV32_IMM(BPF_REG_2, val));
         EMIT_FIXUP_JMP_NEXT_RULE(program,
-                                 BPF_JMP_REG(jmp_op, reg, BPF_REG_2, 0));
+                                 BPF_JMP32_IMM(jmp_op, reg, (int32_t)val, 0));
         break;
     }
     case 8: {
@@ -220,21 +225,25 @@ int bf_cmp_masked_value(struct bf_program *program,
 
     switch (size) {
     case 4: {
+        /* Precompute the masked reference value at codegen time, then
+         * fold the comparison into BPF_JMP32_IMM. The packet register
+         * only needs to be masked when prefixlen < 32; for a /32 match
+         * the mask is all-ones and we can compare the register directly
+         * against the reference. This collapses the previous 5-insn
+         * (or 2-insn for /32) sequence into 2 (or 1) instructions and
+         * removes the use of R2/R3 entirely on this path. */
         uint32_t mask;
-        const uint32_t *addr = ref;
+        uint32_t addr_val = *(const uint32_t *)ref;
+        uint32_t masked;
 
         _bf_prefix_to_mask(prefixlen, (uint8_t *)&mask, 4);
+        masked = addr_val & mask;
 
-        EMIT(program, BPF_MOV32_IMM(BPF_REG_2, *addr));
+        if (mask != ~0U)
+            EMIT(program, BPF_ALU32_IMM(BPF_AND, reg, (int32_t)mask));
 
-        if (mask != ~0U) {
-            EMIT(program, BPF_MOV32_IMM(BPF_REG_3, mask));
-            EMIT(program, BPF_ALU32_REG(BPF_AND, reg, BPF_REG_3));
-            EMIT(program, BPF_ALU32_REG(BPF_AND, BPF_REG_2, BPF_REG_3));
-        }
-
-        EMIT_FIXUP_JMP_NEXT_RULE(program,
-                                 BPF_JMP_REG(jmp_op, reg, BPF_REG_2, 0));
+        EMIT_FIXUP_JMP_NEXT_RULE(
+            program, BPF_JMP32_IMM(jmp_op, reg, (int32_t)masked, 0));
         break;
     }
     case 16: {
