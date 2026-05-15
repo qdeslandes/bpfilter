@@ -168,6 +168,9 @@ int bf_swich_set_default(struct bf_swich *swich, const struct bpf_insn *insns,
 int bf_swich_generate(struct bf_swich *swich)
 {
     struct bf_program *program = swich->program;
+    struct bf_jmpctx end_jmp = bf_jmpctx_default();
+    size_t n_opts = bf_list_size(&swich->options);
+    size_t idx = 0;
 
     // Match an option against the value and jump to the related bytecode
     bf_list_foreach (&swich->options, option_node) {
@@ -177,26 +180,43 @@ int bf_swich_generate(struct bf_swich *swich)
             program, BPF_JMP_IMM(BPF_JEQ, swich->reg, option->imm, 0));
     }
 
-    // Insert the default option if any
-    if (swich->default_opt)
-        swich->default_opt->jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
-
-    // Insert each option's bytecode
-    bf_list_foreach (&swich->options, option_node) {
-        struct bf_swich_option *option = bf_list_node_get_data(option_node);
-
-        bf_jmpctx_cleanup(&option->jmp);
-        for (size_t i = 0; i < option->insns_len; ++i)
-            EMIT(program, option->insns[i]);
-        option->jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
-    }
-
-    // Insert the default instructions
+    /* Emit the default body inline right after the JEQ checks: when no JEQ
+     * matches, execution falls through directly into the default body,
+     * saving one JMP_A instruction compared to a layout where the default
+     * is placed after the option bodies. */
     if (swich->default_opt) {
-        bf_jmpctx_cleanup(&swich->default_opt->jmp);
         for (size_t i = 0; i < swich->default_opt->insns_len; ++i)
             EMIT(program, swich->default_opt->insns[i]);
     }
+
+    /* If there is at least one option, skip past the option bodies after the
+     * default body (or after the JEQs if no default) using a single JMP_A. */
+    if (n_opts > 0)
+        end_jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    /* Emit each option's bytecode. After every body except the last, emit a
+     * JMP_A to the end of the swich. The last option's body falls through to
+     * the end naturally, saving one JMP_A. */
+    bf_list_foreach (&swich->options, option_node) {
+        struct bf_swich_option *option = bf_list_node_get_data(option_node);
+
+        ++idx;
+        bf_jmpctx_cleanup(&option->jmp);
+        for (size_t i = 0; i < option->insns_len; ++i)
+            EMIT(program, option->insns[i]);
+
+        if (idx < n_opts) {
+            option->jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+        } else {
+            /* Last option falls through to end; nothing to resolve later. */
+            option->jmp = (struct bf_jmpctx)bf_jmpctx_default();
+        }
+    }
+
+    /* Resolve the jump that skips over the option bodies, then resolve each
+     * option's trailing JMP_A. The last option's jmp is a default (no-op)
+     * jmpctx, so its cleanup does nothing. */
+    bf_jmpctx_cleanup(&end_jmp);
 
     bf_list_foreach (&swich->options, option_node) {
         struct bf_swich_option *option = bf_list_node_get_data(option_node);

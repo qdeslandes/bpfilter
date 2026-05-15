@@ -73,20 +73,23 @@ static int _bf_matcher_generate_meta_port(struct bf_program *program,
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, BF_PROG_CTX_OFF(l4_hdr)));
 
-    // Get the packet's port into r1
+    /* Get the packet's port into r1.
+     *
+     * Note: TCP (the most common case) is emitted last so its body falls
+     * through to the end of the swich, saving one JMP_A in the hot path. */
     swich = bf_swich_get(program, BPF_REG_8);
-    EMIT_SWICH_OPTION(
-        &swich, IPPROTO_TCP,
-        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
-                    bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
-                        offsetof(struct tcphdr, source) :
-                        offsetof(struct tcphdr, dest)));
     EMIT_SWICH_OPTION(
         &swich, IPPROTO_UDP,
         BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
                     bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
                         offsetof(struct udphdr, source) :
                         offsetof(struct udphdr, dest)));
+    EMIT_SWICH_OPTION(
+        &swich, IPPROTO_TCP,
+        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
+                    bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
+                        offsetof(struct tcphdr, source) :
+                        offsetof(struct tcphdr, dest)));
     EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_1, 0));
 
     r = bf_swich_generate(&swich);

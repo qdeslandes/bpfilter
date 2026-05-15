@@ -171,15 +171,19 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 
     /* Store the size of the L3 protocol header in r4, depending on the protocol
      * ID stored in r7. If the protocol is not supported, we store 0 into r7
-     * and we skip the instructions below. */
+     * and we skip the instructions below.
+     *
+     * Note: the most common protocol (IPv4) is emitted last so that its body
+     * falls through to the end of the swich, saving one JMP_A in the hot
+     * path. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_7);
 
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
         EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
                           BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
+        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
         EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
 
         r = bf_swich_generate(&swich);
@@ -328,19 +332,23 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     assert(program);
 
     /* Parse the L4 protocol and handle unuspported protocol, similarly to
-     * bf_stub_parse_l3_hdr() above. */
+     * bf_stub_parse_l3_hdr() above.
+     *
+     * Note: the most common protocol (TCP) is emitted last so that its body
+     * falls through to the end of the swich, saving one JMP_A in the hot
+     * path. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_8);
 
-        EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
         EMIT_SWICH_OPTION(&swich, IPPROTO_ICMPV6,
                           BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
         EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
 
         r = bf_swich_generate(&swich);
