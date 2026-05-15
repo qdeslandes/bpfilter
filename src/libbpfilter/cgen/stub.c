@@ -264,6 +264,22 @@ static int _bf_stub_l3_offset_const(enum bf_flavor flavor)
 }
 
 /**
+ * Return whether the chain emits any per-packet logging.
+ *
+ * The `bf_runtime` fields `l2_size`, `l3_size` and `l4_size` are only
+ * read by the `bf_pkt_log` elfstub (`BF_ELFSTUB_PKT_LOG`), which is
+ * itself only invoked from `bf_packet_gen_inline_log()` when at least
+ * one non-disabled rule has `rule->log` set — the exact condition that
+ * sets `BF_CHAIN_LOG` in `_bf_chain_check_rule()`. When the chain has
+ * no logging, the size stores in the L2/L3/L4 pre-parser stubs are
+ * dead and can be elided from every packet's hot path.
+ */
+static inline bool _bf_stub_needs_pkt_log(const struct bf_program *program)
+{
+    return program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG);
+}
+
+/**
  * Generate stub to create a dynptr.
  *
  * @param program Program to generate the stub for. Must not be NULL.
@@ -345,8 +361,16 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, BF_PROG_CTX_OFF(l2)));
     EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ethhdr)));
 
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l2_size)));
+    /* `l2_size` is only read by `bf_pkt_log` (BF_ELFSTUB_PKT_LOG), which
+     * is emitted by `bf_packet_gen_inline_log()` only for rules with
+     * `rule->log` set — the same condition that sets `BF_CHAIN_LOG`.
+     * Skip this dead store on every per-packet hot path when the chain
+     * has no logging rule. `r4` itself is still needed as the 4th
+     * argument to `bpf_dynptr_slice` below, so the MOV imm above stays. */
+    if (_bf_stub_needs_pkt_log(program)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l2_size)));
+    }
 
     EMIT_KFUNC_CALL(program, "bpf_dynptr_slice");
 
@@ -449,8 +473,12 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
     }
     _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
 
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l3_size)));
+    /* `l3_size` is only read by `bf_pkt_log`; elide the store when the
+     * chain has no logging rule. See _bf_stub_needs_pkt_log() comment. */
+    if (_bf_stub_needs_pkt_log(program)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l3_size)));
+    }
 
     // Call bpf_dynptr_slice()
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
@@ -642,8 +670,12 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     }
     _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l4_size)));
+    /* `l4_size` is only read by `bf_pkt_log`; elide the store when the
+     * chain has no logging rule. See _bf_stub_needs_pkt_log() comment. */
+    if (_bf_stub_needs_pkt_log(program)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l4_size)));
+    }
 
     // Call bpf_dynptr_slice()
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
