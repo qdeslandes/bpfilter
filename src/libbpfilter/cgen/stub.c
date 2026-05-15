@@ -466,14 +466,29 @@ int bf_stub_load_header(struct bf_program *program,
     assert(program);
     assert(meta);
 
+    /* When the caller targets r6 (the documented "header currently
+     * filtered on" register), consult `program->loaded_hdr` and skip the
+     * `LDX_MEM` if r6 already holds the requested layer's header pointer
+     * from an earlier matcher in the same rule. r6 is callee-saved in
+     * BPF, so its value survives BPF helper and kfunc calls; the cache is
+     * invalidated at every rule boundary by `_bf_program_generate_rule()`
+     * because `JMP_NEXT_RULE` fixups converge from arbitrary points. */
     switch (meta->layer) {
     case BF_MATCHER_LAYER_3:
+        if (reg == BPF_REG_6 && program->loaded_hdr == BF_LOADED_HDR_L3)
+            return 0;
         EMIT(program,
              BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, BF_PROG_CTX_OFF(l3_hdr)));
+        if (reg == BPF_REG_6)
+            program->loaded_hdr = BF_LOADED_HDR_L3;
         break;
     case BF_MATCHER_LAYER_4:
+        if (reg == BPF_REG_6 && program->loaded_hdr == BF_LOADED_HDR_L4)
+            return 0;
         EMIT(program,
              BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, BF_PROG_CTX_OFF(l4_hdr)));
+        if (reg == BPF_REG_6)
+            program->loaded_hdr = BF_LOADED_HDR_L4;
         break;
     default:
         return bf_err_r(-EINVAL,

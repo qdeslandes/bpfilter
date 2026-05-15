@@ -519,6 +519,14 @@ static int _bf_program_generate_rule(struct bf_program *program,
     if (rule->disabled)
         return 0;
 
+    /* r6's contents are not preserved across `JMP_NEXT_RULE` fixups: the
+     * next rule may be reached from any earlier matcher in the previous
+     * rule, so the layer cached in r6 at the start of this rule is
+     * unknown. Invalidate the cache here. The protocol-check stubs below
+     * only touch r7/r8, so the NONE state remains valid until the first
+     * matcher emits an `LDX r6, [r10 + lN_hdr]`. */
+    program->loaded_hdr = BF_LOADED_HDR_NONE;
+
     bf_list_foreach (&rule->matchers, matcher_node) {
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
 

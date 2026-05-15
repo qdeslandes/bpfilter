@@ -69,9 +69,16 @@ static int _bf_matcher_generate_meta_port(struct bf_program *program,
     uint16_t *port = (uint16_t *)bf_matcher_payload(matcher);
     int r;
 
-    // Load L4 header address into r6
-    EMIT(program,
-         BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, BF_PROG_CTX_OFF(l4_hdr)));
+    /* Load L4 header address into r6, but only if a previous matcher in
+     * this rule didn't already cache it there. The cache is tracked in
+     * `program->loaded_hdr` and reset at every rule boundary; piggy-back
+     * on it here, and prime it so a following matcher in the same rule
+     * can do the same. */
+    if (program->loaded_hdr != BF_LOADED_HDR_L4) {
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10,
+                                  BF_PROG_CTX_OFF(l4_hdr)));
+        program->loaded_hdr = BF_LOADED_HDR_L4;
+    }
 
     /* Get the packet's port into r1.
      *

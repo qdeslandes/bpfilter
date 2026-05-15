@@ -205,6 +205,23 @@ struct bf_handle;
 struct bf_set;
 struct bf_set_group;
 
+/**
+ * Which header (if any) is currently cached in @c r6 .
+ *
+ * Tracks the documented "address of the header currently filtered on"
+ * register so that consecutive matchers in the same rule that operate on
+ * the same layer can elide the redundant `LDX r6, [r10 + lN_hdr]` reload.
+ * Reset to `BF_LOADED_HDR_NONE` at the start of every rule because
+ * `JMP_NEXT_RULE` fixups converge from arbitrary points in the previous
+ * rule, so the cache must be assumed cold at a rule boundary.
+ */
+enum bf_loaded_hdr
+{
+    BF_LOADED_HDR_NONE = 0,
+    BF_LOADED_HDR_L3,
+    BF_LOADED_HDR_L4,
+};
+
 struct bf_program
 {
     enum bf_flavor flavor;
@@ -228,6 +245,14 @@ struct bf_program
      * group of its own. A set's position within a group is its bit index
      * in the map's bitmask value. Not serialized. */
     bf_list set_groups;
+
+    /** Which header is currently cached in @c r6 . Updated whenever code
+     * that sets @c r6 is emitted; reset to `BF_LOADED_HDR_NONE` at the
+     * start of every rule (since `JMP_NEXT_RULE` fixups converge there
+     * from arbitrary points). Used to elide redundant
+     * `LDX r6, [r10 + lN_hdr]` reloads when consecutive matchers in the
+     * same rule operate on the same layer. */
+    enum bf_loaded_hdr loaded_hdr;
 
     /** Runtime data used to interact with the program and cache information.
      * This data is not serialized. */
