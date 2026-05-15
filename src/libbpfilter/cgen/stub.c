@@ -36,6 +36,32 @@
 #define _BF_LOW_EH_BITMASK 0x1801800000000801ULL
 
 /**
+ * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
+ * given program flavor.
+ *
+ * `l3_offset` is set exactly once by the flavor's prologue:
+ * - TC and XDP call `bf_stub_parse_l2_ethhdr()`, which stores
+ *   `sizeof(struct ethhdr)` (14).
+ * - NF and CGROUP_SKB store `0` directly (no Ethernet header is available;
+ *   the packet starts at L3).
+ *
+ * Returning this constant lets `bf_stub_parse_l3_hdr()` fold the
+ * `l3_offset` load + add into immediate forms when computing `l4_offset`,
+ * saving instructions on the hot path.
+ */
+static int _bf_stub_l3_offset_const(enum bf_flavor flavor)
+{
+    switch (flavor) {
+    case BF_FLAVOR_TC:
+    case BF_FLAVOR_XDP:
+        return (int)sizeof(struct ethhdr);
+    default:
+        /* BF_FLAVOR_NF and BF_FLAVOR_CGROUP_SKB explicitly store 0. */
+        return 0;
+    }
+}
+
+/**
  * Generate stub to create a dynptr.
  *
  * @param program Program to generate the stub for. Must not be NULL.
@@ -165,9 +191,16 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
     int ret_code;
+    int l3_off_const;
     int r;
 
     assert(program);
+
+    /* l3_offset is a codegen-time constant determined by the program's
+     * flavor prologue. Folding it into the l4_offset computation removes
+     * one stack load (and, for the IPv6 fast path, an extra ALU op) from
+     * every packet on the dominant L3 paths. */
+    l3_off_const = _bf_stub_l3_offset_const(program->flavor);
 
     /* Store the size of the L3 protocol header in r4, depending on the protocol
      * ID stored in r7. If the protocol is not supported, we store 0 into r7
@@ -242,9 +275,13 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
         EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
         EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                  BF_PROG_CTX_OFF(l3_offset)));
-        EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2));
+        /* l3_offset is a codegen-time constant set by the flavor's prologue
+         * (sizeof(ethhdr) for TC/XDP, 0 for NF/CGROUP_SKB). Fold the add
+         * of l3_offset into an ALU64_IMM, removing one LDX from the hot
+         * path. When the constant is 0, skip the ADD entirely. */
+        if (l3_off_const != 0) {
+            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_off_const));
+        }
         EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
                                   BF_PROG_CTX_OFF(l4_offset)));
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
@@ -309,13 +346,13 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         bf_jmpctx_cleanup(&udpjmp);
         bf_jmpctx_cleanup(&noehjmp);
 
-        // Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr)
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                  BF_PROG_CTX_OFF(l3_offset)));
-        EMIT(program,
-             BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, sizeof(struct ipv6hdr)));
-        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
-                                  BF_PROG_CTX_OFF(l4_offset)));
+        /* Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr).
+         * l3_offset is a codegen-time constant set by the flavor's prologue,
+         * so l4_offset = l3_offset + sizeof(ipv6hdr) can be written with a
+         * single ST_MEM immediate, removing both a stack load and an ALU
+         * op from the IPv6 fast path. */
+        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
+                                 l3_off_const + (int)sizeof(struct ipv6hdr)));
 
         bf_jmpctx_cleanup(&ehjmp);
     }
