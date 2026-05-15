@@ -92,7 +92,14 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
             return r;
     }
 
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
+    /* `bf_runtime.l3_offset` is folded into a codegen-time immediate by
+     * `bf_stub_parse_l3_hdr()`; its only remaining reader is the IPv6
+     * EH/NH elfstub. Elide this dead store when that elfstub isn't
+     * reachable in the generated program. */
+    if (bf_stub_l3_offset_needed_in_ctx(program->runtime.chain)) {
+        EMIT(program,
+             BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
+    }
 
     // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)

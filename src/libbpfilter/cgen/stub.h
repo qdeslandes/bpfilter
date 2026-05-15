@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
+struct bf_chain;
 struct bf_matcher_meta;
 struct bf_program;
 
@@ -89,6 +91,25 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * @return 0 on success, or negative errno value on error.
  */
 int bf_stub_parse_l4_hdr(struct bf_program *program);
+
+/**
+ * @brief Whether `bf_runtime.l3_offset` must actually be stored on the BPF
+ *        stack for the generated program.
+ *
+ * `bf_stub_parse_l3_hdr()` folds `l3_offset` into a codegen-time immediate
+ * when calling `bpf_dynptr_slice`, so the only remaining reader of the
+ * field is the IPv6 EH/NH elfstub (`bf_parse_ipv6`). That elfstub is fixed
+ * up into the program only when the IPv6 block of the L3 stub is emitted.
+ *
+ * When this returns false, every `BPF_ST_MEM(... l3_offset ...)` store
+ * emitted by the L2 stub / flavor prologues is a dead write on the
+ * per-packet hot path and can be elided.
+ *
+ * @param chain Chain to inspect. Must not be NULL.
+ * @return true if the runtime `l3_offset` field is read by the generated
+ *         program, false if it can be elided.
+ */
+bool bf_stub_l3_offset_needed_in_ctx(const struct bf_chain *chain);
 
 /**
  * @brief Emit the instructions to check if the packet contains a specific

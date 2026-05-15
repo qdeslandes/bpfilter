@@ -238,6 +238,30 @@ static inline bool _bf_stub_need_ip6_l4_prep(const struct bf_proto_used *used,
 }
 
 /**
+ * @brief Whether `bf_runtime.l3_offset` must actually be stored on the BPF
+ *        stack for the generated program.
+ *
+ * After the LDX→MOV-imm swap in `bf_stub_parse_l3_hdr()`, that function no
+ * longer reads `ctx->l3_offset`. The only remaining reader is the IPv6
+ * EH/NH elfstub (`bf_parse_ipv6`), which is fixed up into the program
+ * only when the IPv6 block of the L3 stub is emitted, i.e. when
+ * `used.ip6 && _bf_stub_need_ip6_l4_prep(...)`.
+ *
+ * When that condition does not hold, every `BPF_ST_MEM(... l3_offset ...)`
+ * store emitted by the L2 stub / flavor prologues is a dead write on the
+ * per-packet hot path and can be elided.
+ */
+bool bf_stub_l3_offset_needed_in_ctx(const struct bf_chain *chain)
+{
+    struct bf_proto_used used;
+
+    assert(chain);
+
+    _bf_stub_collect_proto_used(chain, &used);
+    return used.ip6 && _bf_stub_need_ip6_l4_prep(&used, chain);
+}
+
+/**
  * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
  * given program flavor.
  *
@@ -406,9 +430,14 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
     EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_0,
                               offsetof(struct ethhdr, h_proto)));
 
-    // Set bf_runtime.l3_offset
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
-                             sizeof(struct ethhdr)));
+    /* After the LDX→MOV swap in `bf_stub_parse_l3_hdr()`, the only
+     * consumer of `ctx->l3_offset` is the IPv6 EH/NH elfstub. Elide
+     * this store when that elfstub isn't reachable in this program. */
+    if (bf_stub_l3_offset_needed_in_ctx(program->runtime.chain)) {
+        // Set bf_runtime.l3_offset
+        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
+                                 sizeof(struct ethhdr)));
+    }
 
     return 0;
 }
@@ -483,8 +512,12 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
     // Call bpf_dynptr_slice()
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(dynptr)));
-    EMIT(program,
-         BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset)));
+    /* `l3_offset` is a codegen-time constant determined by the flavor
+     * prologue (sizeof(ethhdr) for TC/XDP, 0 for NF/CGROUP_SKB). Use the
+     * immediate form so we don't reach back into the runtime context for
+     * a value we already know — removes a per-packet stack load and lets
+     * the JIT keep r2 in a register. */
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_2, l3_off_const));
     EMIT(program, BPF_MOV64_REG(BPF_REG_3, BPF_REG_10));
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, BF_PROG_CTX_OFF(l2)));
     EMIT_KFUNC_CALL(program, "bpf_dynptr_slice");
