@@ -45,11 +45,16 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
-    // Store the ingress ifindex into the runtime context
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                              offsetof(struct xdp_md, ingress_ifindex)));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    /* Store the ingress ifindex into the runtime context. `bf_runtime.ifindex`
+     * is only read by `meta.iface` matchers; elide this load/store pair
+     * when no rule in the chain filters on the interface index. See
+     * `bf_stub_ifindex_needed_in_ctx()`. */
+    if (bf_stub_ifindex_needed_in_ctx(program->runtime.chain)) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                                  offsetof(struct xdp_md, ingress_ifindex)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
     if (r)

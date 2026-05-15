@@ -262,6 +262,58 @@ bool bf_stub_l3_offset_needed_in_ctx(const struct bf_chain *chain)
 }
 
 /**
+ * @brief Whether `bf_runtime.ifindex` must actually be stored on the BPF
+ *        stack for the generated program.
+ *
+ * The only reader of `bf_runtime.ifindex` anywhere in the codegen is
+ * `_bf_matcher_generate_meta_iface()` in `cgen/matcher/meta.c`, which
+ * emits an `LDX [r10 + ctx.ifindex]` for every `BF_MATCHER_META_IFACE`
+ * matcher. No ELF stub, logger, or packet-builder reads the field. When
+ * no rule in the chain references `meta.iface` — directly, or as a
+ * `BF_MATCHER_SET` key component — the ifindex setup block emitted by
+ * each flavor prologue is dead code on the per-packet hot path and can
+ * be elided.
+ *
+ * Disabled rules are skipped, matching the convention in
+ * `_bf_stub_collect_proto_used()`.
+ */
+bool bf_stub_ifindex_needed_in_ctx(const struct bf_chain *chain)
+{
+    assert(chain);
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+            enum bf_matcher_type type = bf_matcher_get_type(matcher);
+
+            if (type == BF_MATCHER_META_IFACE)
+                return true;
+
+            if (type == BF_MATCHER_SET) {
+                const struct bf_set *set =
+                    bf_chain_get_set_for_matcher(chain, matcher);
+
+                if (!set)
+                    continue;
+
+                for (size_t i = 0; i < set->n_comps; ++i) {
+                    if (set->key[i] == BF_MATCHER_META_IFACE)
+                        return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
  * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
  * given program flavor.
  *

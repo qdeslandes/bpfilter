@@ -49,25 +49,33 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
-    // Copy the ifindex from to bpf_nf_ctx.state.{in,out}.ifindex the runtime context
+    /* Load r2 = bpf_nf_ctx.state. This is always required: the `pf`
+     * swich below reads `nf_hook_state.pf` through r2 to derive the L3
+     * protocol id stored in r7. */
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
         return offset;
     EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, offset));
-    if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
-            return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
-    } else {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
-            return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
-    }
 
-    if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
+    /* Copy bpf_nf_ctx.state.{in,out}.ifindex into the runtime context.
+     * `bf_runtime.ifindex` is only read by `meta.iface` matchers; elide
+     * the entire in/out → net_device → STX chain when no rule filters
+     * on the interface index. See `bf_stub_ifindex_needed_in_ctx()`. */
+    if (bf_stub_ifindex_needed_in_ctx(program->runtime.chain)) {
+        if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
+                return offset;
+        } else {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
+                return offset;
+        }
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+
+        if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     /* BPF_PROG_TYPE_CGROUP_SKB doesn't provide access the the Ethernet header,
      * so we can't parse it and discover the L3 protocol ID.

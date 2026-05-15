@@ -43,12 +43,18 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
      * a packet is redirected locally from interface #1 to interface #2, then
      * @c ingress_ifindex will contain @c 1 but @c ifindex will contains @c 2 .
      * For egress, only @c ifindex is used.
+     *
+     * `bf_runtime.ifindex` is only read by `meta.iface` matchers; elide
+     * this load/store pair when no rule in the chain filters on the
+     * interface index. See `bf_stub_ifindex_needed_in_ctx()`.
      */
-    if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
-        return r;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (bf_stub_ifindex_needed_in_ctx(program->runtime.chain)) {
+        if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
+            return r;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)

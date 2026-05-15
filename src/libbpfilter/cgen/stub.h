@@ -112,6 +112,24 @@ int bf_stub_parse_l4_hdr(struct bf_program *program);
 bool bf_stub_l3_offset_needed_in_ctx(const struct bf_chain *chain);
 
 /**
+ * @brief Whether `bf_runtime.ifindex` must actually be stored on the BPF
+ *        stack for the generated program.
+ *
+ * The only reader of `bf_runtime.ifindex` is
+ * `_bf_matcher_generate_meta_iface()` in `cgen/matcher/meta.c`, which
+ * emits an `LDX [r10 + ctx.ifindex]` for every `BF_MATCHER_META_IFACE`
+ * matcher. When no rule in the chain uses that matcher (directly or as a
+ * `BF_MATCHER_SET` key component), the ifindex setup block emitted by
+ * each flavor prologue is dead code on the per-packet hot path and can
+ * be elided.
+ *
+ * @param chain Chain to inspect. Must not be NULL.
+ * @return true if the runtime `ifindex` field is read by the generated
+ *         program, false if it can be elided.
+ */
+bool bf_stub_ifindex_needed_in_ctx(const struct bf_chain *chain);
+
+/**
  * @brief Emit the instructions to check if the packet contains a specific
  *        protocol.
  *
