@@ -48,6 +48,7 @@
  */
 
 struct bf_program;
+struct bf_jmpctx;
 
 /// Cleanup attribute for a @ref bf_swich variable.
 #define _clean_bf_swich_ __attribute__((cleanup(bf_swich_cleanup)))
@@ -116,6 +117,12 @@ struct bf_swich
     bf_list options;
     /// Default option, if no case matches the switch's register.
     struct bf_swich_option *default_opt;
+    /** Optional: when set, the JMP_A emitted right after the default
+     * body — i.e. the swich's no-match exit — is captured into this
+     * jmpctx instead of landing at the end of the swich. Callers use
+     * this to fold a sentinel-check JEQ that would otherwise be emitted
+     * immediately after the swich into the swich's own no-match path. */
+    struct bf_jmpctx *default_exit_jmp;
 };
 
 /**
@@ -163,6 +170,25 @@ int bf_swich_add_option(struct bf_swich *swich, uint32_t imm,
  */
 int bf_swich_set_default(struct bf_swich *swich, const struct bpf_insn *insns,
                          size_t insns_len);
+
+/**
+ * Capture the swich's no-match exit jump into a caller-owned jmpctx.
+ *
+ * When set, @ref bf_swich_generate will write the jmpctx for the JMP_A
+ * that follows the default body into @p jmp instead of resolving it
+ * internally to the end of the swich. The caller is then responsible
+ * for ultimately resolving (via @c bf_jmpctx_cleanup / @c _clean_bf_jmpctx_ )
+ * the captured jmpctx to its intended target.
+ *
+ * Must be called before @ref bf_swich_generate . Pass NULL or omit the
+ * call to keep the legacy "JMP_A to end of swich" behaviour.
+ *
+ * @param swich @ref bf_swich object to configure. Can't be NULL.
+ * @param jmp Caller-owned jmpctx that will be assigned to. May be NULL
+ *        to clear a previous setting.
+ */
+void bf_swich_set_default_exit_jmp(struct bf_swich *swich,
+                                   struct bf_jmpctx *jmp);
 
 /**
  * Generate the bytecode for the switch.

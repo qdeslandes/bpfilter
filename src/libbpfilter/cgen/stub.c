@@ -492,7 +492,15 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
 
 int bf_stub_parse_l3_hdr(struct bf_program *program)
 {
-    _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
+    /* Captures the swich's no-match exit JMP_A so it lands directly at
+     * the end of this stub instead of right after the swich. This folds
+     * away the redundant `JEQ r7, 0, end_of_stub` sentinel-check that
+     * used to be emitted right after the swich: the default body's
+     * existing `MOV r7, 0` is still emitted, but the unconditional
+     * branch that follows it now jumps straight to end-of-stub, while
+     * option bodies fall through to the rest of the stub with their
+     * real r7 value intact. */
+    _clean_bf_jmpctx_ struct bf_jmpctx default_exit = bf_jmpctx_default();
     struct bf_proto_used used;
     int ret_code;
     int l3_off_const;
@@ -529,10 +537,15 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
      * Note: the most common protocol (IPv4) is emitted last so that its body
      * falls through to the end of the swich, saving one JMP_A in the hot
      * path. Each option is emitted only if the chain actually filters on
-     * that L3 protocol. */
+     * that L3 protocol.
+     *
+     * The swich's no-match exit is captured into `default_exit` so the
+     * default body's existing JMP_A lands directly at end-of-stub,
+     * folding away the legacy post-swich `JEQ r7, 0, end_of_stub`. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_7);
+        bf_swich_set_default_exit_jmp(&swich, &default_exit);
 
         if (used.ip6) {
             EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
@@ -548,7 +561,6 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         if (r)
             return r;
     }
-    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
 
     /* `l3_size` is only read by `bf_pkt_log`; elide the store when the
      * chain has no logging rule. See _bf_stub_needs_pkt_log() comment. */
@@ -697,7 +709,10 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 
 int bf_stub_parse_l4_hdr(struct bf_program *program)
 {
-    _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
+    /* Captures the swich's no-match exit JMP_A so it lands directly at
+     * end-of-stub, folding the legacy post-swich `JEQ r8, 0, end_of_stub`
+     * sentinel check. See the matching comment in `bf_stub_parse_l3_hdr`. */
+    _clean_bf_jmpctx_ struct bf_jmpctx default_exit = bf_jmpctx_default();
     struct bf_proto_used used;
     int ret_code;
     int r;
@@ -719,10 +734,14 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
      * Note: the most common protocol (TCP) is emitted last so that its body
      * falls through to the end of the swich, saving one JMP_A in the hot
      * path. Each option is emitted only if the chain actually filters on
-     * that L4 protocol. */
+     * that L4 protocol.
+     *
+     * The swich's no-match exit is captured into `default_exit`; see
+     * the matching block in `bf_stub_parse_l3_hdr` for rationale. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_8);
+        bf_swich_set_default_exit_jmp(&swich, &default_exit);
 
         if (used.icmpv6) {
             EMIT_SWICH_OPTION(
@@ -747,7 +766,6 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
         if (r)
             return r;
     }
-    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
     /* `l4_size` is only read by `bf_pkt_log`; elide the store when the
      * chain has no logging rule. See _bf_stub_needs_pkt_log() comment. */

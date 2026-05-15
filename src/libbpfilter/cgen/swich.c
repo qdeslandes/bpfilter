@@ -108,6 +108,7 @@ int bf_swich_init(struct bf_swich *swich, struct bf_program *program, int reg)
         (bf_list_ops[]) {{.free = (bf_list_ops_free)_bf_swich_option_free}});
 
     swich->default_opt = NULL;
+    swich->default_exit_jmp = NULL;
 
     return 0;
 }
@@ -165,6 +166,14 @@ int bf_swich_set_default(struct bf_swich *swich, const struct bpf_insn *insns,
     return 0;
 }
 
+void bf_swich_set_default_exit_jmp(struct bf_swich *swich,
+                                   struct bf_jmpctx *jmp)
+{
+    assert(swich);
+
+    swich->default_exit_jmp = jmp;
+}
+
 int bf_swich_generate(struct bf_swich *swich)
 {
     struct bf_program *program = swich->program;
@@ -190,9 +199,19 @@ int bf_swich_generate(struct bf_swich *swich)
     }
 
     /* If there is at least one option, skip past the option bodies after the
-     * default body (or after the JEQs if no default) using a single JMP_A. */
-    if (n_opts > 0)
-        end_jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+     * default body (or after the JEQs if no default) using a single JMP_A.
+     * When the caller has set `default_exit_jmp`, hand them the jmpctx
+     * instead of resolving it locally — they will redirect this jump to a
+     * later point in the program, folding away an otherwise-redundant
+     * sentinel-check branch. */
+    if (n_opts > 0) {
+        struct bf_jmpctx jmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+        if (swich->default_exit_jmp)
+            *swich->default_exit_jmp = jmp;
+        else
+            end_jmp = jmp;
+    }
 
     /* Emit each option's bytecode. After every body except the last, emit a
      * JMP_A to the end of the swich. The last option's body falls through to
@@ -215,7 +234,9 @@ int bf_swich_generate(struct bf_swich *swich)
 
     /* Resolve the jump that skips over the option bodies, then resolve each
      * option's trailing JMP_A. The last option's jmp is a default (no-op)
-     * jmpctx, so its cleanup does nothing. */
+     * jmpctx, so its cleanup does nothing. When `default_exit_jmp` was set
+     * above, `end_jmp` stays default-constructed (program == NULL) and its
+     * cleanup is a no-op — the caller now owns that jump. */
     bf_jmpctx_cleanup(&end_jmp);
 
     bf_list_foreach (&swich->options, option_node) {
