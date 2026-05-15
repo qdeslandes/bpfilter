@@ -18,13 +18,17 @@
 #include <linux/udp.h>
 
 #include <endian.h>
+#include <stdbool.h>
 #include <stddef.h>
 
+#include <bpfilter/chain.h>
 #include <bpfilter/ctx.h>
 #include <bpfilter/elfstub.h>
 #include <bpfilter/flavor.h>
 #include <bpfilter/helper.h>
 #include <bpfilter/matcher.h>
+#include <bpfilter/rule.h>
+#include <bpfilter/set.h>
 #include <bpfilter/verdict.h>
 
 #include "cgen/jmp.h"
@@ -34,6 +38,165 @@
 #include "filter.h"
 
 #define _BF_LOW_EH_BITMASK 0x1801800000000801ULL
+
+/**
+ * @brief Tracks which L3/L4 parsing branches are actually needed by a chain.
+ *
+ * Computed by walking every non-disabled rule's matchers (and, for set
+ * matchers, each set key component). Used to elide unused branches of the
+ * unconditional L3/L4 header pre-parser emitted by
+ * `bf_stub_parse_l3_hdr()` and `bf_stub_parse_l4_hdr()`.
+ *
+ * Removing unused branches is safe because every rule emits a per-layer
+ * protocol guard (`bf_stub_rule_check_protocol`) that bails to the next
+ * rule when `r7`/`r8` doesn't match: packets of an unfiltered family
+ * simply hit those guards and skip every rule, without needing their
+ * L3/L4 header pre-parsed.
+ */
+struct bf_proto_used
+{
+    bool ip4; /**< Any matcher requires the IPv4 parsing branch. */
+    bool ip6; /**< Any matcher requires the IPv6 parsing branch. */
+    bool tcp; /**< Any matcher needs the TCP header sliced. */
+    bool udp; /**< Any matcher needs the UDP header sliced. */
+    bool icmp; /**< Any matcher needs the ICMP header sliced. */
+    bool icmpv6; /**< Any matcher needs the ICMPv6 header sliced. */
+    bool any_l4; /**< Any matcher needs r8 (the L4 proto id) set. */
+};
+
+/**
+ * @brief Fold a single matcher type into the protocol-usage bitmask.
+ *
+ * Looks up the matcher's `bf_matcher_meta` to discover which layer and
+ * protocol header are required, then sets the matching bits in `out`.
+ *
+ * Layer-3 matchers set `ip4`/`ip6` based on `meta->hdr_id`. Layer-4
+ * matchers set the matching L4 bool and `any_l4`. Meta matchers without
+ * a layer that nonetheless require a sliced L4 header (port-based meta
+ * matchers, flow hash, flow probability) force both `tcp` and `udp` on:
+ * the packet's actual L4 protocol is only known at runtime, and the L4
+ * stub's swich must cover both TCP and UDP so the header is sliced
+ * regardless of which one the packet uses. `meta.l4_proto` only needs
+ * `r8` set, not the header sliced.
+ */
+static void _bf_stub_account_matcher_type(enum bf_matcher_type type,
+                                          struct bf_proto_used *out)
+{
+    const struct bf_matcher_meta *meta;
+
+    assert(out);
+
+    /* Meta matchers that don't carry a layer in their meta but still
+     * need the L4 stub to slice the L4 header. The packet's actual L4
+     * proto isn't known at codegen time, so both TCP and UDP cases must
+     * remain in the swich for the slice to happen. */
+    switch (type) {
+    case BF_MATCHER_META_SPORT:
+    case BF_MATCHER_META_DPORT:
+    case BF_MATCHER_META_FLOW_HASH:
+    case BF_MATCHER_META_FLOW_PROBABILITY:
+        out->tcp = true;
+        out->udp = true;
+        out->any_l4 = true;
+        break;
+    case BF_MATCHER_META_L4_PROTO:
+        /* Only needs r8 (the L4 proto id), set by the L3 stub. The L4
+         * header doesn't have to be sliced. */
+        out->any_l4 = true;
+        break;
+    default:
+        break;
+    }
+
+    meta = bf_matcher_get_meta(type);
+    if (!meta)
+        return;
+
+    if (meta->layer == BF_MATCHER_LAYER_3) {
+        if (meta->hdr_id == ETH_P_IP)
+            out->ip4 = true;
+        else if (meta->hdr_id == ETH_P_IPV6)
+            out->ip6 = true;
+    } else if (meta->layer == BF_MATCHER_LAYER_4) {
+        out->any_l4 = true;
+        switch (meta->hdr_id) {
+        case IPPROTO_TCP:
+            out->tcp = true;
+            break;
+        case IPPROTO_UDP:
+            out->udp = true;
+            break;
+        case IPPROTO_ICMP:
+            out->icmp = true;
+            break;
+        case IPPROTO_ICMPV6:
+            out->icmpv6 = true;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/**
+ * @brief Walk the chain and compute which L3/L4 parsing branches are
+ *        actually referenced by at least one (non-disabled) rule.
+ *
+ * Iterates every non-disabled rule's matchers. For `BF_MATCHER_SET`
+ * matchers, each `set->key[i]` component is folded into the bitmask
+ * because the set lookup will read those header fields.
+ *
+ * Post-processing rules:
+ * - If `any_l4` is set, force `ip4 = ip6 = true`: `r8` is populated
+ *   only inside the IPv4/IPv6 parsing blocks (`LDX r8, [r0+iphdr.protocol]`
+ *   and the IPv6 nexthdr path), so any L4 matcher requires both blocks
+ *   to remain reachable.
+ * - If `chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR)`, force `ip6 = true`
+ *   (the EH-store path lives in the IPv6 block).
+ */
+static void _bf_stub_collect_proto_used(const struct bf_chain *chain,
+                                        struct bf_proto_used *out)
+{
+    assert(chain);
+    assert(out);
+
+    *out = (struct bf_proto_used) {0};
+
+    bf_list_foreach (&chain->rules, rule_node) {
+        const struct bf_rule *rule = bf_list_node_get_data(rule_node);
+
+        if (rule->disabled)
+            continue;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            const struct bf_matcher *matcher =
+                bf_list_node_get_data(matcher_node);
+            enum bf_matcher_type type = bf_matcher_get_type(matcher);
+
+            if (type == BF_MATCHER_SET) {
+                const struct bf_set *set =
+                    bf_chain_get_set_for_matcher(chain, matcher);
+
+                if (!set)
+                    continue;
+
+                for (size_t i = 0; i < set->n_comps; ++i)
+                    _bf_stub_account_matcher_type(set->key[i], out);
+            } else {
+                _bf_stub_account_matcher_type(type, out);
+            }
+        }
+    }
+
+    /* `r8` is populated inside the IPv4/IPv6 parsing blocks only, so any
+     * L4 matcher implicitly requires both L3 branches to remain present. */
+    if (out->any_l4)
+        out->ip4 = out->ip6 = true;
+
+    /* The EH-store path lives in the IPv6 parsing block. */
+    if (chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR))
+        out->ip6 = true;
+}
 
 /**
  * Return the codegen-time-constant value of `bf_runtime.l3_offset` for the
@@ -190,11 +353,28 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
 int bf_stub_parse_l3_hdr(struct bf_program *program)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
+    struct bf_proto_used used;
     int ret_code;
     int l3_off_const;
     int r;
 
     assert(program);
+
+    /* Discover which L3/L4 branches the chain actually filters on, so we
+     * can elide unused branches of the pre-parser. Safe because every
+     * rule emits its own per-layer protocol guard
+     * (`bf_stub_rule_check_protocol`) that bails out when r7/r8 doesn't
+     * match: packets of an unfiltered family hit those guards and skip
+     * every rule, without needing their L3/L4 header pre-parsed. */
+    _bf_stub_collect_proto_used(program->runtime.chain, &used);
+
+    /* If the chain filters on neither IPv4 nor IPv6, the entire L3 stub
+     * is dead code: no L3 header to slice, no L4 proto id to extract.
+     * Returning immediately also leaves r7 with whatever value the L2
+     * stub (or flavor prologue) wrote, so any `meta.l3_proto` matcher
+     * comparing r7 directly still observes the real ethertype. */
+    if (!used.ip4 && !used.ip6)
+        return 0;
 
     /* l3_offset is a codegen-time constant determined by the program's
      * flavor prologue. Folding it into the l4_offset computation removes
@@ -208,15 +388,20 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
      *
      * Note: the most common protocol (IPv4) is emitted last so that its body
      * falls through to the end of the swich, saving one JMP_A in the hot
-     * path. */
+     * path. Each option is emitted only if the chain actually filters on
+     * that L3 protocol. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_7);
 
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
-        EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
+        if (used.ip6) {
+            EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IPV6),
+                              BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ipv6hdr)));
+        }
+        if (used.ip4) {
+            EMIT_SWICH_OPTION(&swich, htobe16(ETH_P_IP),
+                              BPF_MOV64_IMM(BPF_REG_4, sizeof(struct iphdr)));
+        }
         EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
 
         r = bf_swich_generate(&swich);
@@ -266,8 +451,9 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 
     /* Unsupported L3 protocols have been filtered out at the beginning of this
      * function and would jump over the block below, so there is no need to
-     * worry about them here. */
-    {
+     * worry about them here. Each branch is emitted only if the chain
+     * actually filters on that L3 protocol. */
+    if (used.ip4) {
         // IPv4
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
@@ -288,7 +474,7 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
                                   offsetof(struct iphdr, protocol)));
     }
 
-    {
+    if (used.ip6) {
         // IPv6
         struct bf_jmpctx tcpjmp, udpjmp, noehjmp, ehjmp;
         struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, _BF_LOW_EH_BITMASK)};
@@ -363,29 +549,49 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 int bf_stub_parse_l4_hdr(struct bf_program *program)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
+    struct bf_proto_used used;
     int ret_code;
     int r;
 
     assert(program);
+
+    /* Discover which L4 protocols the chain actually filters on; if none
+     * of the L4 headers we know how to slice are referenced, the L4 stub
+     * is dead code and we can return immediately. r8 is already populated
+     * by the L3 stub for any meta.l4_proto-style matchers that may care. */
+    _bf_stub_collect_proto_used(program->runtime.chain, &used);
+
+    if (!used.tcp && !used.udp && !used.icmp && !used.icmpv6)
+        return 0;
 
     /* Parse the L4 protocol and handle unuspported protocol, similarly to
      * bf_stub_parse_l3_hdr() above.
      *
      * Note: the most common protocol (TCP) is emitted last so that its body
      * falls through to the end of the swich, saving one JMP_A in the hot
-     * path. */
+     * path. Each option is emitted only if the chain actually filters on
+     * that L4 protocol. */
     {
         _clean_bf_swich_ struct bf_swich swich =
             bf_swich_get(program, BPF_REG_8);
 
-        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMPV6,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
-        EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
-                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
+        if (used.icmpv6) {
+            EMIT_SWICH_OPTION(
+                &swich, IPPROTO_ICMPV6,
+                BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
+        }
+        if (used.icmp) {
+            EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
+                              BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
+        }
+        if (used.udp) {
+            EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
+                              BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
+        }
+        if (used.tcp) {
+            EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
+                              BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
+        }
         EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
 
         r = bf_swich_generate(&swich);

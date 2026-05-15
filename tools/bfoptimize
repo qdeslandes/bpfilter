@@ -604,6 +604,8 @@ def _handle_tool(
         target = (root / tool_input["path"]).resolve()
         if not str(target).startswith(str(root)):
             return "error: path outside source tree"
+        if target.is_dir():
+            return f"error: {tool_input['path']}: is a directory, use list_dir to list its contents"
         try:
             return target.read_text(encoding="utf-8")
         except FileNotFoundError:
