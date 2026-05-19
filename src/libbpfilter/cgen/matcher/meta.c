@@ -25,7 +25,6 @@
 #include "cgen/matcher/cmp.h"
 #include "cgen/program.h"
 #include "cgen/runtime.h"
-#include "cgen/swich.h"
 #include "filter.h"
 
 /** @todo Add support for input and output interface filtering based on the
@@ -65,46 +64,45 @@ _bf_matcher_generate_meta_probability(struct bf_program *program,
 static int _bf_matcher_generate_meta_port(struct bf_program *program,
                                           const struct bf_matcher *matcher)
 {
-    _clean_bf_swich_ struct bf_swich swich;
     uint16_t *port = (uint16_t *)bf_matcher_payload(matcher);
-    int r;
+    size_t port_off;
 
-    /* Load L4 header address into r6, but only if a previous matcher in
-     * this rule didn't already cache it there. The cache is tracked in
-     * `program->loaded_hdr` and reset at every rule boundary; piggy-back
-     * on it here, and prime it so a following matcher in the same rule
-     * can do the same. */
+    /* TCP and UDP share the same source/dest port offsets:
+     *   offsetof(struct tcphdr, source) == offsetof(struct udphdr, source)
+     *   offsetof(struct tcphdr, dest)   == offsetof(struct udphdr, dest)
+     * Assert this at compile time so the single load below is provably
+     * valid for both protocols. */
+    static_assert(offsetof(struct tcphdr, source) ==
+                      offsetof(struct udphdr, source),
+                  "tcphdr.source and udphdr.source must share an offset");
+    static_assert(offsetof(struct tcphdr, dest) ==
+                      offsetof(struct udphdr, dest),
+                  "tcphdr.dest and udphdr.dest must share an offset");
+
+    port_off = bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
+                   offsetof(struct tcphdr, source) :
+                   offsetof(struct tcphdr, dest);
+
+    // Load L4 header address into r6 (skipped if already cached).
     if (program->loaded_hdr != BF_LOADED_HDR_L4) {
         EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10,
                                   BF_PROG_CTX_OFF(l4_hdr)));
         program->loaded_hdr = BF_LOADED_HDR_L4;
     }
 
-    /* Get the packet's port into r1.
-     *
-     * Note: TCP (the most common case) is emitted last so its body falls
-     * through to the end of the swich, saving one JMP_A in the hot path. */
-    swich = bf_swich_get(program, BPF_REG_8);
-    EMIT_SWICH_OPTION(
-        &swich, IPPROTO_UDP,
-        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
-                    bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
-                        offsetof(struct udphdr, source) :
-                        offsetof(struct udphdr, dest)));
-    EMIT_SWICH_OPTION(
-        &swich, IPPROTO_TCP,
-        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
-                    bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
-                        offsetof(struct tcphdr, source) :
-                        offsetof(struct tcphdr, dest)));
-    EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_1, 0));
+    /* Validate that L4 is TCP or UDP in 2 BPF insns instead of an 8-insn
+     * swich + 1-insn zero-check (-6 insns per matcher on the hot path):
+     *   if (r8 == TCP) skip the next instruction
+     *   if (r8 != UDP) jump to next rule
+     * After both, r8 is guaranteed to be TCP or UDP. Non-TCP/UDP packets
+     * route to the next rule via the standard JMP_NEXT_RULE fixup,
+     * preserving the original semantics (skip rule on unsupported L4). */
+    EMIT(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 1));
+    EMIT_FIXUP_JMP_NEXT_RULE(program,
+                             BPF_JMP_IMM(BPF_JNE, BPF_REG_8, IPPROTO_UDP, 0));
 
-    r = bf_swich_generate(&swich);
-    if (r)
-        return bf_err_r(r, "failed to generate swich for meta.(s|d)port");
-
-    // If r1 == 0: no TCP nor UDP header found, jump to the next rule
-    EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 0));
+    // Load the port (same offset for TCP and UDP) into r1.
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6, port_off));
 
     if (bf_matcher_get_op(matcher) == BF_MATCHER_RANGE) {
         EMIT(program, BPF_BSWAP(BPF_REG_1, 16));
