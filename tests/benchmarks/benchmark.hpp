@@ -173,6 +173,19 @@ public:
 
         return {opts};
     }
+
+    [[nodiscard]] ProgRunStats run_once(const std::span<const uint8_t> &pkt) const
+    {
+        LIBBPF_OPTS(bpf_test_run_opts, opts,
+                    .data_in = (const void *)pkt.data(),
+                    .data_size_in = (uint32_t)pkt.size(), .repeat = 1);
+
+        const int r = bpf_prog_test_run_opts(_fd, &opts);
+        if (r < 0)
+            throw std::runtime_error("failed to run BPF program");
+
+        return {opts};
+    }
 };
 
 } // namespace bft
