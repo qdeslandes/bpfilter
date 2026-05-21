@@ -69,6 +69,17 @@ std::vector<uint8_t> uint32ToIp6(uint32_t val)
     };
 }
 
+std::array<uint8_t, 42> makeIp4IcmpPkt(uint32_t saddr)
+{
+    auto pkt = ::bft::pkt_local_ip4_icmp;
+    const auto ip = uint32ToIp4(saddr);
+    pkt[26] = ip[0];
+    pkt[27] = ip[1];
+    pkt[28] = ip[2];
+    pkt[29] = ip[3];
+    return pkt;
+}
+
 void chain_policy_c(::benchmark::State &state)
 {
     Chain chain("bf_benchmark", BF_HOOK_XDP, BF_VERDICT_DROP);
@@ -308,6 +319,104 @@ BENCHMARK(single_rule__ip4_saddr__x_elem_set)
     ->Arg(1 << 3)
     ->Arg(1 << 7)
     ->Arg(1 << 15);
+
+void single_rule__ip4_saddr__x_elem_set__cold(::benchmark::State &state)
+{
+    Chain chain("bf_benchmark", BF_HOOK_XDP, BF_VERDICT_ACCEPT);
+
+    Set s = Set({BF_MATCHER_IP4_SADDR});
+
+    uint32_t nrules = state.range(0);
+    for (uint32_t i = 0; i < nrules - 1; ++i)
+        s << uint32ToIp4(i);
+
+    s << std::vector<uint8_t> {0x7f, 0x02, 0x0a, 0x0a};
+
+    chain << Rule(BF_VERDICT_DROP, std::nullopt, 0,
+                  std::vector<Matcher> {
+                      Matcher(BF_MATCHER_SET, BF_MATCHER_IN, {0, 0, 0, 0}),
+                  });
+
+    chain << s;
+
+    auto chainp = chain.get();
+    int ret = bf_chain_set(chainp.get(), nullptr);
+    if (ret < 0)
+        throw std::runtime_error("failed to load chain");
+
+    auto prog = bft::Program(chain.name());
+
+    // Pool of packets with distinct source IPs, all present in the set, to
+    // avoid repeated lookups hitting the same warm cache lines.
+    const uint32_t pool_size = std::min(nrules - 1, static_cast<uint32_t>(1024));
+    std::vector<std::array<uint8_t, 42>> pkts(pool_size);
+    for (uint32_t i = 0; i < pool_size; ++i)
+        pkts[i] = makeIp4IcmpPkt(i);
+
+    size_t idx = 0;
+    while (state.KeepRunning()) {
+        auto stats = prog.run_once(pkts[idx++ % pool_size]);
+        if (stats.retval != XDP_DROP)
+            state.SkipWithError("benchmark run failed");
+
+        state.SetIterationTime((double)stats.duration * stats.repeat);
+    }
+
+    state.counters["nInsn"] = prog.nInsn();
+    bm::set_flags(state, {.use_set = true});
+    state.SetLabel(
+        std::format("1 rule, ip4.saddr, {} elements set, cold", nrules));
+}
+
+BENCHMARK(single_rule__ip4_saddr__x_elem_set__cold)
+    ->Arg(1 << 3)
+    ->Arg(1 << 7)
+    ->Arg(1 << 15);
+
+void chain_set__ip4_saddr__x_elem_set(::benchmark::State &state)
+{
+    const std::string chain_name = "bf_benchmark";
+    Chain chain(chain_name, BF_HOOK_XDP, BF_VERDICT_ACCEPT);
+
+    Set s = Set({BF_MATCHER_IP4_SADDR});
+    uint32_t nelems = state.range(0);
+    for (uint32_t i = 0; i < nelems; ++i)
+        s << uint32ToIp4(i);
+    chain << s;
+
+    chain << Rule(BF_VERDICT_DROP, std::nullopt, 0,
+                  std::vector<Matcher> {
+                      Matcher(BF_MATCHER_SET, BF_MATCHER_IN, {0, 0, 0, 0}),
+                  });
+
+    auto chainp = chain.get();
+
+    for (auto _: state) {
+        int ret = bf_chain_set(chainp.get(), nullptr);
+        if (ret < 0) {
+            state.SkipWithError("failed to load chain");
+            break;
+        }
+
+        state.PauseTiming();
+        ret = bf_chain_flush(chain_name.c_str());
+        if (ret < 0) {
+            state.SkipWithError("failed to flush chain");
+            break;
+        }
+        state.ResumeTiming();
+    }
+
+    bm::set_flags(state, {.use_set = true, .userspace_only = true});
+    state.SetLabel(
+        std::format("load chain, ip4.saddr, {} elements set", nelems));
+}
+
+BENCHMARK(chain_set__ip4_saddr__x_elem_set)
+    ->Arg(1 << 3)
+    ->Arg(1 << 16)
+    ->Arg(1 << 20)
+    ->Unit(::benchmark::kMillisecond);
 
 void single_rule__ip4_saddr_c(::benchmark::State &state)
 {
