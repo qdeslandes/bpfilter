@@ -27,7 +27,8 @@
  *
  * The packet-header parsing pipeline is only emitted if the chain consumes
  * its outputs (see @ref bf_chain_needs_pkt_parse ): otherwise the prologue
- * reduces to the `ifindex` and `pkt_size` stores.
+ * reduces to the `pkt_size` store, plus the `ifindex` store if a rule
+ * filters on it (`BF_CHAIN_NEEDS_IFINDEX`).
  *
  * @warning When the parsing pipeline is emitted,
  * @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr for
@@ -49,10 +50,12 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     assert(program);
 
     // Store the ingress ifindex into the runtime context
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                              offsetof(struct xdp_md, ingress_ifindex)));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_NEEDS_IFINDEX)) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                                  offsetof(struct xdp_md, ingress_ifindex)));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     /* Calculate the packet size and store it into the runtime context. r2
      * (data) and r3 (data_end) are preserved for the direct-access parsing

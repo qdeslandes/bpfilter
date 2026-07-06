@@ -205,13 +205,16 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
         }
 
         /* Track which prologue features the matchers rely on: IPv6 nexthdr
-         * storage, the L3 header and protocol ID, the L4 header slice, and
-         * the normalized L4 protocol ID. */
+         * storage, the L3 header and protocol ID, the L4 header slice, the
+         * normalized L4 protocol ID, and the interface index. */
         if (!rule->disabled) {
             switch (bf_matcher_get_type(matcher)) {
             case BF_MATCHER_IP6_NEXTHDR:
                 chain->flags |= BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
                                 BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
+                break;
+            case BF_MATCHER_META_IFACE:
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_IFINDEX);
                 break;
             case BF_MATCHER_META_L3_PROTO:
                 chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L3);

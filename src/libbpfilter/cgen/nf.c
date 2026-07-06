@@ -45,32 +45,42 @@ static inline bool _bf_nf_hook_is_ingress(enum bf_hook hook)
 static int _bf_nf_gen_inline_prologue(struct bf_program *program)
 {
     bool needs_parse;
+    bool needs_ifindex;
     int r;
     int offset;
 
     assert(program);
 
     needs_parse = bf_chain_needs_pkt_parse(program->runtime.chain);
+    needs_ifindex =
+        program->runtime.chain->flags & BF_FLAG(BF_CHAIN_NEEDS_IFINDEX);
 
-    // Copy the ifindex from to bpf_nf_ctx.state.{in,out}.ifindex the runtime context
-    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, offset));
-    if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
+    /* The nf_hook_state pointer (r2) feeds both the ifindex chase below and
+     * the L3 protocol derivation: load it if either consumer is emitted. */
+    if (needs_ifindex || needs_parse) {
+        if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
             return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
-    } else {
-        if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
-            return offset;
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, offset));
     }
 
-    if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
+    // Copy bpf_nf_ctx.state.{in,out}.ifindex into the runtime context
+    if (needs_ifindex) {
+        if (_bf_nf_hook_is_ingress(program->runtime.chain->hook)) {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "in")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        } else {
+            if ((offset = bf_btf_get_field_off("nf_hook_state", "out")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, offset));
+        }
+
+        if ((offset = bf_btf_get_field_off("net_device", "ifindex")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_3, offset));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     /* The L3 protocol derivation reads the address family from r2 (the
      * nf_hook_state pointer loaded above), so it must be emitted before the

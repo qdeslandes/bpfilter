@@ -34,7 +34,9 @@ struct bf_set;
  * 'log' instruction.
  *
  * Similarly, the L4 header slice and the normalized L4 protocol ID are only
- * computed in the program's prologue if a rule consumes them.
+ * computed in the program's prologue if a rule consumes them, and the
+ * interface index is only derived and stored in the runtime context if a
+ * rule filters on it.
  *
  * Grouping the list of required features at the chain level prevents us from
  * parsing all the rules and matchers everytime the feature would affect the
@@ -72,6 +74,11 @@ enum bf_chain_flags
     /** A rule computes the packet's flow hash: the flow-hash ELF stub reads
      * `l3_hdr` and `l4_hdr` from the runtime context. */
     BF_CHAIN_FLOW_HASH,
+
+    /** A rule reads the interface index from the runtime context
+     * (`meta.iface`). This flag uses the last free bit of `bf_chain.flags`:
+     * adding another flag requires widening the field and its pack format. */
+    BF_CHAIN_NEEDS_IFINDEX,
 
     _BF_CHAIN_FLAGS_MAX,
 };

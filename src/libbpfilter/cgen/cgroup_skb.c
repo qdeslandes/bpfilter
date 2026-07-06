@@ -51,11 +51,13 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
      * @c ingress_ifindex will contain @c 1 but @c ifindex will contains @c 2 .
      * For egress, only @c ifindex is used.
      */
-    if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
-        return r;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
-    EMIT(program,
-         BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_NEEDS_IFINDEX)) {
+        if ((r = bf_btf_get_field_off("__sk_buff", "ifindex")) < 0)
+            return r;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, r));
+        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(ifindex)));
+    }
 
     /* No rule consumes packet-header state: skip the L3 protocol derivation
      * and the parsing pipeline entirely. r7 and r8 keep their prologue-reset

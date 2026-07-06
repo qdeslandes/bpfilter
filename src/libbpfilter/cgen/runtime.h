@@ -162,7 +162,8 @@ struct bf_runtime
     __u32 bf_aligned(8) l4_offset;
 
     /** On ingress, index of the input interface. On egress, index of the
-     * output interface. */
+     * output interface. Only written under `BF_CHAIN_NEEDS_IFINDEX`: the
+     * `meta.iface` matcher is its only consumer. */
     __u32 bf_aligned(8) ifindex;
 
     /** Pointer to the L2 protocol header (in a dynamic pointer slice). Only
