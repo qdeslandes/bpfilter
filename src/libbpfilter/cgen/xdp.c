@@ -25,31 +25,23 @@
 /**
  * Generate XDP program prologue.
  *
- * @warning @ref bf_stub_parse_l2l3_hdr will check for the L3 protocol: if it
- * is neither IPv4 nor IPv6, every L3 and L4 matcher is skipped.
+ * @warning @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr
+ * for flow-hash chains) will check for the L3 protocol: if it is neither IPv4
+ * nor IPv6, every L3 and L4 matcher is skipped.
  *
  * @param program Program to generate the prologue for. Must not be NULL.
  * @return 0 on success, or negative errno value on error.
  */
 static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
 {
-    /* The IPv4 L4 fast path in bf_stub_parse_l2l3_hdr() jumps over the
-     * dedicated L4 slice request: l4_done is closed by the scope cleanup on
-     * return, so no instruction may be emitted between the
-     * bf_stub_parse_l4_hdr() call and the end of this function. */
+    /* The L4 fast paths in the L2+L3 parsing stubs jump over the dedicated
+     * L4 slice request: l4_done is closed by the scope cleanup on return, so
+     * no instruction may be emitted between the bf_stub_parse_l4_hdr() call
+     * and the end of this function. */
     _clean_bf_jmpctx_ struct bf_jmpctx l4_done = bf_jmpctx_default();
     int r;
 
     assert(program);
-
-    // Calculate the packet size and store it into the runtime context
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                              offsetof(struct xdp_md, data)));
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
-                              offsetof(struct xdp_md, data_end)));
-    EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_3, BPF_REG_2));
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
     // Store the ingress ifindex into the runtime context
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
@@ -57,13 +49,34 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
-    r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
-    if (r)
-        return r;
+    /* Calculate the packet size and store it into the runtime context. r2
+     * (data) and r3 (data_end) are preserved for the direct-access parsing
+     * stub below. */
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                              offsetof(struct xdp_md, data)));
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
+                              offsetof(struct xdp_md, data_end)));
+    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_3));
+    EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_4, BPF_REG_2));
+    EMIT(program,
+         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(pkt_size)));
 
-    r = bf_stub_parse_l2l3_hdr(program, &l4_done);
-    if (r)
-        return r;
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_FLOW_HASH)) {
+        /* The flow-hash ELF stub dereferences bf_runtime.l3_hdr and
+         * bf_runtime.l4_hdr directly: both must remain dynptr slice pointers,
+         * so keep the slice-based parsing. */
+        r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
+        if (r)
+            return r;
+
+        r = bf_stub_parse_l2l3_hdr(program, &l4_done);
+        if (r)
+            return r;
+    } else {
+        r = bf_stub_parse_l2l3_hdr_direct(program, &l4_done);
+        if (r)
+            return r;
+    }
 
     r = bf_stub_parse_l4_hdr(program);
     if (r)

@@ -128,6 +128,54 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
                            struct bf_jmpctx *l4_done);
 
 /**
+ * Emit instructions to parse the packet's L2 Ethernet header and L3 header
+ * through direct packet access, for XDP programs.
+ *
+ * Semantics mirror @ref bf_stub_parse_l2l3_hdr , but the combined L2+L3 slice
+ * request is replaced with a single pointer bounds check: XDP programs loaded
+ * without `BPF_F_XDP_HAS_FRAGS` have the whole packet directly accessible
+ * through `xdp_md.data` and `xdp_md.data_end`, so no kfunc call is emitted on
+ * the fast path. The dynptr creation becomes lazy: the dynptr is only created
+ * on the slow paths that genuinely need it (packets too short for the
+ * combined window, IPv4 with options, IPv6 with extension headers, and IPv6
+ * packets too short for the direct L4 window), which then converge on the
+ * slice-based L3 parsing and the shared L4 derivation.
+ *
+ * On entry, @c r2 must hold `xdp_md.data` and @c r3 `xdp_md.data_end`,
+ * converted to packet pointers by the verifier. @c r3 is preserved across the
+ * whole fast block: the IPv6 L4 fast path reuses it for its own bounds check.
+ *
+ * On the fast path, @c r6 (and @c r9 under @c BF_CHAIN_NEEDS_L4_HDR ) are
+ * pinned as packet pointers with a verified range instead of slice pointers:
+ * matchers load at generation-time-constant offsets within the checked range,
+ * so their bytecode is unchanged. Unlike @ref bf_stub_parse_l2l3_hdr , the
+ * `l3_hdr` store is gated on @c BF_CHAIN_LOG : the packet logging ELF stub
+ * reads it through `bpf_probe_read_kernel()`, and the EH parsing ELF stubs
+ * are only reachable through the slow paths, where the L3 slice request
+ * overwrites `l3_hdr` with a slice pointer first.
+ *
+ * When the chain consumes the L4 header slice ( @c BF_CHAIN_NEEDS_L4_HDR ),
+ * both plain IPv4 packets and IPv6 packets without extension headers derive
+ * the L4 state inline and end with a forward jump stored in @p l4_done , with
+ * the same contract as @ref bf_stub_parse_l2l3_hdr : the caller must close it
+ * after the @ref bf_stub_parse_l4_hdr call, with no instruction emitted in
+ * between.
+ *
+ * @warning This stub must not be used when the chain computes flow hashes
+ * ( @c BF_CHAIN_FLOW_HASH ): the flow-hash ELF stub dereferences
+ * `bf_runtime.l3_hdr` and `bf_runtime.l4_hdr` directly, so both must remain
+ * dynptr slice pointers, not spilled packet pointers.
+ *
+ * @param program Program to emit instructions into. Can't be NULL.
+ * @param l4_done Jump context over the dedicated L4 slice request,
+ *        initialized by this function and closed by the caller. Can't be
+ *        NULL.
+ * @return 0 on success, or negative errno value on error.
+ */
+int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
+                                  struct bf_jmpctx *l4_done);
+
+/**
  * Emit instructions to get a dynptr slice for the packet's L4 header.
  *
  * This function behaves similarly to @ref bf_stub_parse_l3_hdr but for the
