@@ -44,10 +44,12 @@
  * The program will use the BPF registers to following way:
  * - @c r0 : return value
  * - @c r1 to @c r5 (included): general purpose registers
- * - @c r6 : address of the header currently filtered on
+ * - @c r6 : L3 header address, pinned by the prologue for the program's
+ *   lifetime (ctx address for `cgroup_sock_addr` programs)
  * - @c r7 : L3 protocol ID
  * - @c r8 : L4 protocol ID
- * - @c r9 : unused
+ * - @c r9 : L4 header address, pinned by the prologue for the program's
+ *   lifetime (packet flavors only)
  * - @c r10 : frame pointer
  *
  * This convention is followed throughout the project and must be followed all

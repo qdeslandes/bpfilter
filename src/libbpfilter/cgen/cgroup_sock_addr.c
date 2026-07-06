@@ -312,7 +312,8 @@ static int _bf_cgroup_sock_addr_generate_set(struct bf_program *program,
                 bf_matcher_type_to_str(set->key[0]));
         }
 
-        return bf_set_generate_trie_lookup(program, matcher, (size_t)ctx_off,
+        return bf_set_generate_trie_lookup(program, matcher, BPF_REG_6,
+                                           (size_t)ctx_off,
                                            meta->hdr_payload_size);
     }
 
@@ -346,8 +347,8 @@ static int _bf_cgroup_sock_addr_generate_set(struct bf_program *program,
             EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_8,
                                       BF_PROG_SCR_OFF(offset)));
         } else {
-            r = bf_stub_load(program, (size_t)ctx_off, meta->hdr_payload_size,
-                             BF_PROG_SCR_OFF(offset));
+            r = bf_stub_load(program, BPF_REG_6, (size_t)ctx_off,
+                             meta->hdr_payload_size, BF_PROG_SCR_OFF(offset));
             if (r)
                 return r;
         }

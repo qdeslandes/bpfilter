@@ -59,7 +59,7 @@ int bf_set_generate_map_lookup(struct bf_program *program,
 }
 
 int bf_set_generate_trie_lookup(struct bf_program *program,
-                                const struct bf_matcher *matcher,
+                                const struct bf_matcher *matcher, int src_reg,
                                 size_t src_offset, size_t addr_size)
 {
     int r;
@@ -71,7 +71,8 @@ int bf_set_generate_trie_lookup(struct bf_program *program,
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1, BF_PROG_SCR_OFF(4)));
 
-    r = bf_stub_load(program, src_offset, addr_size, BF_PROG_SCR_OFF(8));
+    r = bf_stub_load(program, src_reg, src_offset, addr_size,
+                     BF_PROG_SCR_OFF(8));
     if (r)
         return r;
 

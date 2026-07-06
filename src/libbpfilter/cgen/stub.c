@@ -227,6 +227,11 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l3_hdr)));
 
+    /* Pin the L3 header address in r6 for the program's lifetime: r6 is
+     * callee-saved, so it survives every helper, kfunc, and ELF stub call
+     * emitted on the match path. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_0));
+
     /* Unsupported L3 protocols have been filtered out at the beginning of this
      * function and would jump over the block below, so there is no need to
      * worry about them here. */
@@ -388,6 +393,9 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l4_hdr)));
 
+    // Pin the L4 header address in r9 for the program's lifetime
+    EMIT(program, BPF_MOV64_REG(BPF_REG_9, BPF_REG_0));
+
     return 0;
 }
 
@@ -415,32 +423,23 @@ int bf_stub_rule_check_protocol(struct bf_program *program,
     return 0;
 }
 
-int bf_stub_load_header(struct bf_program *program,
-                        const struct bf_matcher_meta *meta, int reg)
+int bf_stub_hdr_reg(const struct bf_matcher_meta *meta)
 {
-    assert(program);
     assert(meta);
 
     switch (meta->layer) {
     case BF_MATCHER_LAYER_3:
-        EMIT(program,
-             BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, BF_PROG_CTX_OFF(l3_hdr)));
-        break;
+        return BPF_REG_6;
     case BF_MATCHER_LAYER_4:
-        EMIT(program,
-             BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, BF_PROG_CTX_OFF(l4_hdr)));
-        break;
+        return BPF_REG_9;
     default:
-        return bf_err_r(-EINVAL,
-                        "layer ID %d is not a valid layer to load header for",
+        return bf_err_r(-EINVAL, "layer ID %d has no pinned header register",
                         meta->layer);
     }
-
-    return 0;
 }
 
-int bf_stub_load(struct bf_program *program, size_t src_offset, size_t size,
-                 int dst_offset)
+int bf_stub_load(struct bf_program *program, int src_reg, size_t src_offset,
+                 size_t size, int dst_offset)
 {
     size_t src_off = src_offset;
     int dst_off = dst_offset;
@@ -466,7 +465,7 @@ int bf_stub_load(struct bf_program *program, size_t src_offset, size_t size,
             copy_bytes = 2;
         }
 
-        EMIT(program, BPF_LDX_MEM(bpf_size, BPF_REG_1, BPF_REG_6, src_off));
+        EMIT(program, BPF_LDX_MEM(bpf_size, BPF_REG_1, src_reg, src_off));
         EMIT(program, BPF_STX_MEM(bpf_size, BPF_REG_10, BPF_REG_1, dst_off));
 
         remaining_size -= copy_bytes;
@@ -480,9 +479,15 @@ int bf_stub_load(struct bf_program *program, size_t src_offset, size_t size,
 int bf_stub_stx_payload(struct bf_program *program,
                         const struct bf_matcher_meta *meta, size_t offset)
 {
+    int src_reg;
+
     assert(program);
     assert(meta);
 
-    return bf_stub_load(program, meta->hdr_payload_offset,
+    src_reg = bf_stub_hdr_reg(meta);
+    if (src_reg < 0)
+        return src_reg;
+
+    return bf_stub_load(program, src_reg, meta->hdr_payload_offset,
                         meta->hdr_payload_size, BF_PROG_SCR_OFF(offset));
 }

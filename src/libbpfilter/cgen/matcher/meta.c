@@ -69,21 +69,19 @@ static int _bf_matcher_generate_meta_port(struct bf_program *program,
     uint16_t *port = (uint16_t *)bf_matcher_payload(matcher);
     int r;
 
-    // Load L4 header address into r6
-    EMIT(program,
-         BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, BF_PROG_CTX_OFF(l4_hdr)));
-
-    // Get the packet's port into r1
+    /* Get the packet's port into r1, reading the L4 header from r9 where the
+     * prologue pinned it. Both swich options are guarded by a check on r8, so
+     * r9 is never read if the L4 header hasn't been parsed. */
     swich = bf_swich_get(program, BPF_REG_8);
     EMIT_SWICH_OPTION(
         &swich, IPPROTO_TCP,
-        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
+        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_9,
                     bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
                         offsetof(struct tcphdr, source) :
                         offsetof(struct tcphdr, dest)));
     EMIT_SWICH_OPTION(
         &swich, IPPROTO_UDP,
-        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6,
+        BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_9,
                     bf_matcher_get_type(matcher) == BF_MATCHER_META_SPORT ?
                         offsetof(struct udphdr, source) :
                         offsetof(struct udphdr, dest)));

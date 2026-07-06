@@ -66,8 +66,14 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program);
  * - Once the slice has been requested, the L3 header is processed to extract
  *   the offset of the L4 header and the L4 protocol ID
  *
+ * Besides storing the header address in `bf_runtime.l3_hdr`, this function
+ * pins it in @c r6 for the program's lifetime: @c r6 is callee-saved, so it
+ * survives every helper, kfunc, and ELF stub call on the match path.
+ *
  * If the L3 protocol is not supported, this function returns before requesting
- * a dynamic pointer slice, and the L3 protocol ID register is set to 0.
+ * a dynamic pointer slice, and the L3 protocol ID register is set to 0. On
+ * that path @c r6 is left uninitialized: matchers must be guarded by an L3
+ * protocol check on @c r7 before reading it.
  *
  * @param program Program to emit instructions into.
  * @return 0 on success, or negative errno value on error.
@@ -82,8 +88,14 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * - The size of the slice to request depends on the L4 protocol ID stored in @c r8
  * - There is no logic to process the L4 header and determine the L5 protocol
  *
+ * Besides storing the header address in `bf_runtime.l4_hdr`, this function
+ * pins it in @c r9 for the program's lifetime: @c r9 is callee-saved, so it
+ * survives every helper, kfunc, and ELF stub call on the match path.
+ *
  * If the L4 protocol is not supported, this function returns before requesting
- * a dynamic pointer slice, and the L4 protocol ID register is set to 0.
+ * a dynamic pointer slice, and the L4 protocol ID register is set to 0. On
+ * that path @c r9 is left uninitialized: matchers must be guarded by an L4
+ * protocol check on @c r8 before reading it.
  *
  * @param program Program to emit instructions into.
  * @return 0 on success, or negative errno value on error.
@@ -106,33 +118,35 @@ int bf_stub_rule_check_protocol(struct bf_program *program,
                                 const struct bf_matcher_meta *meta);
 
 /**
- * @brief Emit the instructions to load a header address into a register.
+ * @brief Return the register holding the pinned header address for a layer.
  *
- * @param program Program to emit the instructions into. Can't be NULL.
- * @param meta Metadata for the matcher type to apply. Defines the layer to load
- *        the header address for.
- * @param reg Register to load the header address into.
- * @return 0 on success, or negative error value on error.
+ * The prologue parse stubs pin the L3 header address in `R6` and the L4
+ * header address in `R9` for the program's lifetime, so matchers read header
+ * fields directly from these registers. This function emits no instruction.
+ *
+ * @param meta Metadata for the matcher type to apply. Defines the layer to
+ *        return the header register for. Can't be NULL.
+ * @return Register number on success, or negative errno value on error.
  */
-int bf_stub_load_header(struct bf_program *program,
-                        const struct bf_matcher_meta *meta, int reg);
+int bf_stub_hdr_reg(const struct bf_matcher_meta *meta);
 
 /**
- * @brief Copy bytes from `R6 + src_offset` to `R10 + dst_offset`.
+ * @brief Copy bytes from `src_reg + src_offset` to `R10 + dst_offset`.
  *
  * The access size per iteration is determined by checking alignment of both
  * source and destination offsets (both advance each iteration), picking the
  * largest width where both are aligned and remaining >= width.
  *
  * @param program Program to emit the instructions into. Can't be NULL.
- * @param src_offset Byte offset from `R6` to start reading from.
+ * @param src_reg Register holding the base address to read from.
+ * @param src_offset Byte offset from `src_reg` to start reading from.
  * @param size Number of bytes to copy.
  * @param dst_offset Byte offset from `R10` (stack pointer) to write to. Use
  *        `BF_PROG_SCR_OFF()` for scratch area offsets.
  * @return 0 on success, or negative error value on error.
  */
-int bf_stub_load(struct bf_program *program, size_t src_offset, size_t size,
-                 int dst_offset);
+int bf_stub_load(struct bf_program *program, int src_reg, size_t src_offset,
+                 size_t size, int dst_offset);
 
 int bf_stub_stx_payload(struct bf_program *program,
                         const struct bf_matcher_meta *meta, size_t offset);

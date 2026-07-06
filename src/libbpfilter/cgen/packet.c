@@ -37,10 +37,11 @@
  *    emits deduplicated protocol guards before the matcher loop,
  *    so each L3/L4 protocol is verified at most once per rule.
  *
- * 2. Header + field load:  `bf_stub_load_header()` loads the header
- *    base address into `R6`, then `_bf_matcher_pkt_load_field()` reads
- *    the target field into the specified register (and `reg+1` for
- *    128-bit values such as IPv6 addresses).
+ * 2. Field load:  the prologue parse stubs pin the L3 header address in
+ *    `R6` and the L4 header address in `R9` for the program's lifetime,
+ *    so `_bf_matcher_pkt_load_field()` reads the target field directly
+ *    from the pinned register returned by `bf_stub_hdr_reg()` (and
+ *    `reg+1` for 128-bit values such as IPv6 addresses).
  *
  * 3. Comparison:  A `bf_cmp_*` function compares the value in the
  *    specified register against the matcher's reference payload.
@@ -56,40 +57,41 @@
 /**
  * @brief Load a packet field from the header into the specified register.
  *
- * `R6` must already point to the header base. For 128-bit fields (IPv6
- * addresses), the low 8 bytes are loaded into `reg` and the high 8 bytes into
- * `reg + 1`.
+ * `src_reg` must point to the header base (see `bf_stub_hdr_reg()`). For
+ * 128-bit fields (IPv6 addresses), the low 8 bytes are loaded into `reg` and
+ * the high 8 bytes into `reg + 1`.
  *
  * @param program Program to emit into. Can't be NULL.
  * @param meta Matcher metadata describing field offset and size. Can't be NULL.
+ * @param src_reg BPF register holding the header base address.
  * @param reg BPF register to load the value into.
  * @return 0 on success, negative errno on error.
  */
 static int _bf_matcher_pkt_load_field(struct bf_program *program,
                                       const struct bf_matcher_meta *meta,
-                                      int reg)
+                                      int src_reg, int reg)
 {
     switch (meta->hdr_payload_size) {
     case 1:
         EMIT(program,
-             BPF_LDX_MEM(BPF_B, reg, BPF_REG_6, meta->hdr_payload_offset));
+             BPF_LDX_MEM(BPF_B, reg, src_reg, meta->hdr_payload_offset));
         break;
     case 2:
         EMIT(program,
-             BPF_LDX_MEM(BPF_H, reg, BPF_REG_6, meta->hdr_payload_offset));
+             BPF_LDX_MEM(BPF_H, reg, src_reg, meta->hdr_payload_offset));
         break;
     case 4:
         EMIT(program,
-             BPF_LDX_MEM(BPF_W, reg, BPF_REG_6, meta->hdr_payload_offset));
+             BPF_LDX_MEM(BPF_W, reg, src_reg, meta->hdr_payload_offset));
         break;
     case 8:
         EMIT(program,
-             BPF_LDX_MEM(BPF_DW, reg, BPF_REG_6, meta->hdr_payload_offset));
+             BPF_LDX_MEM(BPF_DW, reg, src_reg, meta->hdr_payload_offset));
         break;
     case 16:
         EMIT(program,
-             BPF_LDX_MEM(BPF_DW, reg, BPF_REG_6, meta->hdr_payload_offset));
-        EMIT(program, BPF_LDX_MEM(BPF_DW, reg + 1, BPF_REG_6,
+             BPF_LDX_MEM(BPF_DW, reg, src_reg, meta->hdr_payload_offset));
+        EMIT(program, BPF_LDX_MEM(BPF_DW, reg + 1, src_reg,
                                   meta->hdr_payload_offset + 8));
         break;
     default:
@@ -102,20 +104,20 @@ static int _bf_matcher_pkt_load_field(struct bf_program *program,
 static int _bf_matcher_pkt_load(struct bf_program *program,
                                 const struct bf_matcher_meta *meta, int reg)
 {
-    int r;
+    int src_reg;
 
-    r = bf_stub_load_header(program, meta, BPF_REG_6);
-    if (r)
-        return r;
+    src_reg = bf_stub_hdr_reg(meta);
+    if (src_reg < 0)
+        return src_reg;
 
-    return _bf_matcher_pkt_load_field(program, meta, reg);
+    return _bf_matcher_pkt_load_field(program, meta, src_reg, reg);
 }
 
 /**
  * @brief Generic load + value compare for matchers whose field size and offset
  * are fully described by `_bf_matcher_metas`.
  *
- * Emits: header load -> field load -> `bf_cmp_value`.
+ * Emits: field load (from the pinned header register) -> `bf_cmp_value`.
  *
  * @param program Program to generate bytecode into. Can't be NULL.
  * @param matcher Matcher to generate bytecode for. Can't be NULL.
@@ -277,11 +279,11 @@ static int _bf_matcher_pkt_generate_ip6_dscp(struct bf_program *program,
                                              const struct bf_matcher_meta *meta)
 {
     uint8_t dscp;
-    int r;
+    int src_reg;
 
-    r = bf_stub_load_header(program, meta, BPF_REG_6);
-    if (r)
-        return r;
+    src_reg = bf_stub_hdr_reg(meta);
+    if (src_reg < 0)
+        return src_reg;
 
     dscp = *(uint8_t *)bf_matcher_payload(matcher);
 
@@ -289,7 +291,7 @@ static int _bf_matcher_pkt_generate_ip6_dscp(struct bf_program *program,
      *   [version 4b] [DSCP 6b] [ECN 2b] [flow label (high 4b)]
      * Load 2 bytes, convert to big-endian, mask with 0x0fc0 to isolate
      * the 6-bit DSCP field, then compare against dscp << 6. */
-    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_1, BPF_REG_6, 0));
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_1, src_reg, 0));
     EMIT(program, BPF_ENDIAN(BPF_TO_BE, BPF_REG_1, 16));
     EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0fc0));
 
@@ -319,18 +321,20 @@ static int _bf_matcher_pkt_generate_set(struct bf_program *program,
 
     if (set->use_trie) {
         const struct bf_matcher_meta *meta = bf_matcher_get_meta(set->key[0]);
+        int src_reg;
 
         if (!meta) {
             return bf_err_r(-EINVAL, "missing meta for '%s'",
                             bf_matcher_type_to_str(set->key[0]));
         }
 
-        r = bf_stub_load_header(program, meta, BPF_REG_6);
-        if (r)
-            return bf_err_r(r, "failed to load protocol header into BPF_REG_6");
+        src_reg = bf_stub_hdr_reg(meta);
+        if (src_reg < 0)
+            return src_reg;
 
-        return bf_set_generate_trie_lookup(
-            program, matcher, meta->hdr_payload_offset, meta->hdr_payload_size);
+        return bf_set_generate_trie_lookup(program, matcher, src_reg,
+                                           meta->hdr_payload_offset,
+                                           meta->hdr_payload_size);
     }
 
     for (size_t i = 0; i < set->n_comps; ++i) {
@@ -341,10 +345,6 @@ static int _bf_matcher_pkt_generate_set(struct bf_program *program,
             return bf_err_r(-EINVAL, "missing meta for '%s'",
                             bf_matcher_type_to_str(type));
         }
-
-        r = bf_stub_load_header(program, meta, BPF_REG_6);
-        if (r)
-            return bf_err_r(r, "failed to load protocol header into BPF_REG_6");
 
         r = bf_stub_stx_payload(program, meta, offset);
         if (r) {

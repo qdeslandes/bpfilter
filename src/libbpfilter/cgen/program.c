@@ -568,35 +568,39 @@ static int _bf_program_generate_rule(struct bf_program *program,
     }
 
     if (rule->log && rule->log_rate_ns) {
-        // Rate-limited log: check last_log_ts in the state map before logging.
-        //
-        // R9 (callee-saved) holds the pointer to this rule's state entry
-        // across the bpf_ktime_get_ns() call.
-        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_9, BPF_REG_10,
+        /* Rate-limited log: check last_log_ts in the state map before
+         * logging. Only r0 to r3 are used: bpf_ktime_get_ns() is called
+         * before the state map pointer is loaded, so no value has to
+         * survive a helper call. R9 is reserved for the L4 header address
+         * in packet flavors and can't be borrowed here.
+         *
+         * The helper is called before the NULL check: the NULL branch only
+         * exists to satisfy the verifier, as the prologue lookup on a
+         * single-entry array map can't miss at runtime. */
+        EMIT(program, BPF_EMIT_CALL(BPF_FUNC_ktime_get_ns));
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10,
                                   BF_PROG_CTX_OFF(state_map)));
         {
             // Outer skip: state_map is NULL (shouldn't happen at runtime,
             // but the verifier requires the NULL check).
             _clean_bf_jmpctx_ struct bf_jmpctx null_ctx =
-                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_9, 0, 0));
+                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 0));
 
             if (rule->index > 0) {
                 EMIT(program,
                      BPF_ALU64_IMM(
-                         BPF_ADD, BPF_REG_9,
+                         BPF_ADD, BPF_REG_1,
                          (int)(rule->index * sizeof(struct bf_rule_state))));
             }
 
-            EMIT(program, BPF_EMIT_CALL(BPF_FUNC_ktime_get_ns));
-
-            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_9, 0));
-            EMIT(program, BPF_MOV64_REG(BPF_REG_2, BPF_REG_0));
-            EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_2, BPF_REG_1));
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 0));
+            EMIT(program, BPF_MOV64_REG(BPF_REG_3, BPF_REG_0));
+            EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_3, BPF_REG_2));
 
             {
-                // Load log_rate_ns as a 64-bit immediate into R1.
+                // Load log_rate_ns as a 64-bit immediate into R2.
                 const struct bpf_insn rate_insn[2] = {
-                    BPF_LD_IMM64(BPF_REG_1, rule->log_rate_ns),
+                    BPF_LD_IMM64(BPF_REG_2, rule->log_rate_ns),
                 };
                 EMIT(program, rate_insn[0]);
                 EMIT(program, rate_insn[1]);
@@ -605,9 +609,9 @@ static int _bf_program_generate_rule(struct bf_program *program,
             {
                 // Inner skip: delta < log_rate_ns means still within window.
                 _clean_bf_jmpctx_ struct bf_jmpctx rate_ctx = bf_jmpctx_get(
-                    program, BPF_JMP_REG(BPF_JLT, BPF_REG_2, BPF_REG_1, 0));
+                    program, BPF_JMP_REG(BPF_JLT, BPF_REG_3, BPF_REG_2, 0));
 
-                EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_9, BPF_REG_0, 0));
+                EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0));
 
                 r = program->runtime.ops->gen_inline_log(program, rule);
                 if (r)
