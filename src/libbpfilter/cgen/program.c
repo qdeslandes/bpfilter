@@ -424,6 +424,7 @@ static int _bf_program_fixup(struct bf_program *program,
         switch (type) {
         case BF_FIXUP_TYPE_JMP_NEXT_RULE:
         case BF_FIXUP_TYPE_JMP_GUARD_MISS:
+        case BF_FIXUP_TYPE_JMP_VERDICT:
             insn_type = BF_FIXUP_INSN_OFF;
             value = (int)(program->img.size - fixup->insn - 1U);
             break;
@@ -619,11 +620,52 @@ static int _bf_program_rule_guard_sig(const struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Check whether a rule may join a field-cache run.
+ *
+ * A rule may consume and publish the r1/r2 field cache (see the
+ * pipeline comment in cgen/packet.c), and be a member of a verdict run,
+ * only if its whole body is a single cacheable matcher followed by an
+ * exiting verdict: log, counters, mark, and REDIRECT emit
+ * helper/kfunc/ELF-stub calls that clobber r1-r5, and CONTINUE falls
+ * through to the next rule after a match, with register state diverging
+ * from the compare-miss path.
+ *
+ * @param rule Rule to check. Can't be NULL.
+ * @return True if the rule is run-eligible.
+ */
+static bool _bf_rule_is_run_eligible(const struct bf_rule *rule)
+{
+    return bf_list_size(&rule->matchers) == 1 &&
+           bf_packet_matcher_is_cacheable(
+               bf_list_node_get_data(bf_list_get_head(&rule->matchers))) &&
+           !rule->log && !rule->has_counters && !bf_rule_mark_is_set(rule) &&
+           (rule->verdict == BF_VERDICT_ACCEPT ||
+            rule->verdict == BF_VERDICT_DROP ||
+            rule->verdict == BF_VERDICT_NEXT);
+}
+
+/**
+ * @brief Get the type of a rule's single matcher.
+ *
+ * Only meaningful for run-eligible rules, which carry exactly one matcher.
+ *
+ * @param rule Rule to get the matcher type of. Can't be NULL.
+ * @return The rule's single matcher's type.
+ */
+static enum bf_matcher_type _bf_rule_matcher_type(const struct bf_rule *rule)
+{
+    return bf_matcher_get_type(
+        bf_list_node_get_data(bf_list_get_head(&rule->matchers)));
+}
+
 static int _bf_program_generate_rule(struct bf_program *program,
-                                     struct bf_rule *rule)
+                                     struct bf_rule *rule,
+                                     const struct bf_rule *next)
 {
     uint32_t checked_layers = 0;
     struct bf_guard_sig sig;
+    bool run_member;
     int ret_code;
     int r = 0;
 
@@ -635,21 +677,38 @@ static int _bf_program_generate_rule(struct bf_program *program,
     if (rule->disabled)
         return 0;
 
-    /* A rule may consume and publish the r1/r2 field cache (see the
-     * pipeline comment in cgen/packet.c) only if its whole body is a
-     * single cacheable matcher followed by an exiting verdict: log,
-     * counters, mark, and REDIRECT emit helper/kfunc/ELF-stub calls that
-     * clobber r1-r5, and CONTINUE falls through to the next rule after a
-     * match, with register state diverging from the compare-miss path. */
-    program->field_cache.rule_eligible =
-        bf_list_size(&rule->matchers) == 1 &&
-        bf_packet_matcher_is_cacheable(
-            bf_list_node_get_data(bf_list_get_head(&rule->matchers))) &&
-        !rule->log && !rule->has_counters && !bf_rule_mark_is_set(rule) &&
-        (rule->verdict == BF_VERDICT_ACCEPT ||
-         rule->verdict == BF_VERDICT_DROP || rule->verdict == BF_VERDICT_NEXT);
+    program->field_cache.rule_eligible = _bf_rule_is_run_eligible(rule);
     if (!program->field_cache.rule_eligible)
         program->field_cache.valid = false;
+
+    /* Verdict-run stage: consecutive run-eligible rules carrying the same
+     * matcher type (hence the same guard signature and field-cache key)
+     * and the same verdict share a single `MOV r0` + `EXIT` block. Every
+     * rule of the run but the last is a member: its compare jumps to the
+     * shared block on match (a pending `BF_FIXUP_TYPE_JMP_VERDICT` fixup)
+     * and falls through to the next rule on mismatch. The run closes on
+     * the first non-member rule, whose own `MOV r0` becomes the shared
+     * block: the pending fixups resolve right before it. The run is
+     * force-closed before the accumulated match-jump offset can overflow
+     * the jump's 16-bit displacement: the breaking rule emits its verdict
+     * in normal polarity, resolving all pending match jumps to its own
+     * verdict pair (correct, since every run rule shares the verdict),
+     * and a new run simply restarts at the next rule. */
+    run_member =
+        program->field_cache.rule_eligible && next &&
+        _bf_rule_is_run_eligible(next) &&
+        _bf_rule_matcher_type(next) == _bf_rule_matcher_type(rule) &&
+        next->verdict == rule->verdict &&
+        !(program->verdict_run.active &&
+          program->img.size - program->verdict_run.start_insn >= SHRT_MAX / 2);
+    if (run_member) {
+        program->verdict_run.member = true;
+        if (!program->verdict_run.active) {
+            program->verdict_run.active = true;
+            program->verdict_run.verdict = rule->verdict;
+            program->verdict_run.start_insn = program->img.size;
+        }
+    }
 
     /* Protocol guard stage: consecutive rules with the same guard
      * signature share a guard group. Only the first rule of the group
@@ -718,6 +777,8 @@ static int _bf_program_generate_rule(struct bf_program *program,
         if (r)
             return r;
     }
+
+    program->verdict_run.member = false;
 
     if (bf_rule_mark_is_set(rule)) {
         if (!program->runtime.ops->gen_inline_set_mark) {
@@ -799,33 +860,52 @@ static int _bf_program_generate_rule(struct bf_program *program,
         EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_UPDATE_COUNTERS);
     }
 
-    switch (rule->verdict) {
-    case BF_VERDICT_ACCEPT:
-    case BF_VERDICT_DROP:
-    case BF_VERDICT_NEXT:
-        r = program->runtime.ops->get_verdict(rule->verdict, &ret_code);
-        if (r)
-            return r;
-        EMIT(program, BPF_MOV64_IMM(BPF_REG_0, ret_code));
-        EMIT(program, BPF_EXIT_INSN());
-        break;
-    case BF_VERDICT_REDIRECT:
-        if (!program->runtime.ops->gen_inline_redirect) {
-            return bf_err_r(-ENOTSUP, "redirect is not supported by %s hook",
-                            bf_hook_to_str(program->runtime.chain->hook));
+    /* A run member's verdict materializes through the run's shared
+     * verdict block: its compare already jumps there on match, and mark,
+     * log, and counters blocks are unreachable by eligibility, so the
+     * verdict switch is skipped entirely. */
+    if (!run_member) {
+        switch (rule->verdict) {
+        case BF_VERDICT_ACCEPT:
+        case BF_VERDICT_DROP:
+        case BF_VERDICT_NEXT:
+            r = program->runtime.ops->get_verdict(rule->verdict, &ret_code);
+            if (r)
+                return r;
+
+            /* Closing rule of a verdict run: its `MOV r0` is the run's
+             * shared verdict block, so the pending match jumps resolve
+             * right before it. The closing rule's verdict equals the
+             * run's by construction. */
+            if (program->verdict_run.active) {
+                r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_VERDICT);
+                if (r)
+                    return bf_err_r(r, "failed to generate verdict fixups");
+                program->verdict_run.active = false;
+            }
+
+            EMIT(program, BPF_MOV64_IMM(BPF_REG_0, ret_code));
+            EMIT(program, BPF_EXIT_INSN());
+            break;
+        case BF_VERDICT_REDIRECT:
+            if (!program->runtime.ops->gen_inline_redirect) {
+                return bf_err_r(-ENOTSUP,
+                                "redirect is not supported by %s hook",
+                                bf_hook_to_str(program->runtime.chain->hook));
+            }
+            r = program->runtime.ops->gen_inline_redirect(
+                program, rule->redirect_ifindex, rule->redirect_dir);
+            if (r)
+                return r;
+            break;
+        case BF_VERDICT_CONTINUE:
+            // Fall through to next rule or default chain policy.
+            break;
+        default:
+            bf_abort("unsupported verdict, this should not happen: %d",
+                     rule->verdict);
+            break;
         }
-        r = program->runtime.ops->gen_inline_redirect(
-            program, rule->redirect_ifindex, rule->redirect_dir);
-        if (r)
-            return r;
-        break;
-    case BF_VERDICT_CONTINUE:
-        // Fall through to next rule or default chain policy.
-        break;
-    default:
-        bf_abort("unsupported verdict, this should not happen: %d",
-                 rule->verdict);
-        break;
     }
 
     r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_NEXT_RULE);
@@ -1033,8 +1113,22 @@ int bf_program_generate(struct bf_program *program)
     }
 
     bf_list_foreach (&chain->rules, rule_node) {
-        r = _bf_program_generate_rule(program,
-                                      bf_list_node_get_data(rule_node));
+        bf_list_node *next_node = bf_list_node_next(rule_node);
+        const struct bf_rule *next = NULL;
+
+        /* Peek at the next enabled rule, skipping disabled ones: the
+         * verdict-run logic groups a rule with the rule that actually
+         * generates the following bytecode. */
+        while (next_node && !next) {
+            const struct bf_rule *candidate = bf_list_node_get_data(next_node);
+
+            if (!candidate->disabled)
+                next = candidate;
+            next_node = bf_list_node_next(next_node);
+        }
+
+        r = _bf_program_generate_rule(program, bf_list_node_get_data(rule_node),
+                                      next);
         if (r)
             return r;
     }

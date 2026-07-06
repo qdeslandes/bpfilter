@@ -88,6 +88,74 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
 
     jmp_op = bf_cmp_get_jmp_ins(matcher);
 
+    if (program->verdict_run.member) {
+        /* Verdict-run member: invert the branch polarity, so a match
+         * jumps to the run's shared verdict block and a miss falls
+         * through to the next rule. Inverting `jmp_op` folds `negate`
+         * correctly, since `bf_cmp_get_jmp_ins()` already did. Members
+         * only carry cacheable matchers, so only sizes 1, 2, 4, and 16
+         * are reachable. Neither path mutates `reg`/`reg + 1` (r3 is the
+         * only scratch), preserving the field cache across the run. */
+        uint8_t inv_op = (jmp_op == BPF_JNE) ? BPF_JEQ : BPF_JNE;
+
+        switch (size) {
+        case 1:
+        case 2: {
+            uint32_t val =
+                (size == 1) ? *(const uint8_t *)ref : *(const uint16_t *)ref;
+
+            EMIT_FIXUP_JMP_VERDICT(program, BPF_JMP_IMM(inv_op, reg, val, 0));
+            break;
+        }
+        case 4: {
+            uint32_t val = *(const uint32_t *)ref;
+
+            EMIT_FIXUP_JMP_VERDICT(program, BPF_JMP32_IMM(inv_op, reg, val, 0));
+            break;
+        }
+        case 16: {
+            const uint8_t *addr = ref;
+            struct bpf_insn ld64_lo[2] = {
+                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr))};
+            struct bpf_insn ld64_hi[2] = {
+                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr + 8))};
+
+            EMIT(program, ld64_lo[0]);
+            EMIT(program, ld64_lo[1]);
+
+            if (jmp_op == BPF_JNE) {
+                /* Plain EQ: a match requires both halves equal. A low
+                 * half mismatch skips the high half check and falls
+                 * through to the next rule (the local jump closes at the
+                 * end of the scope, i.e. the end of the member); a full
+                 * match jumps to the shared verdict block. */
+                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_get(
+                    program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                EMIT_FIXUP_JMP_VERDICT(
+                    program, BPF_JMP_REG(BPF_JEQ, reg + 1, BPF_REG_3, 0));
+            } else {
+                // Negated EQ: any differing half is a match.
+                EMIT_FIXUP_JMP_VERDICT(program,
+                                       BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                EMIT_FIXUP_JMP_VERDICT(
+                    program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            }
+            break;
+        }
+        default:
+            return bf_err_r(-EINVAL,
+                            "unsupported verdict-run comparison size %u", size);
+        }
+
+        return 0;
+    }
+
     switch (size) {
     case 1:
     case 2: {

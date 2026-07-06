@@ -35,6 +35,10 @@ enum bf_fixup_type
      * group closes, unlike @c BF_FIXUP_TYPE_JMP_NEXT_RULE which resolves at
      * the end of every rule. */
     BF_FIXUP_TYPE_JMP_GUARD_MISS,
+    /** Jump to the shared verdict block of the current verdict run. Resolved
+     * lazily when the run closes, right before the closing rule emits its
+     * `MOV r0`. */
+    BF_FIXUP_TYPE_JMP_VERDICT,
     /// Set the counters map file descriptor in the @c BPF_LD_MAP_FD instruction.
     BF_FIXUP_TYPE_COUNTERS_MAP_FD,
     /// Set the printer map file descriptor in the @c BPF_LD_MAP_FD instruction.

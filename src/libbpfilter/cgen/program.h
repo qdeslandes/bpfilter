@@ -62,7 +62,10 @@
  * field load when `bf_program.field_cache` records that the previous rule
  * left the same field there. Any new cross-rule codegen clobbering @c r1
  * to @c r5 between a rule's compare and the next rule's matcher must
- * invalidate `bf_program.field_cache`.
+ * invalidate `bf_program.field_cache`. Verdict runs
+ * (`bf_program.verdict_run`) additionally rely on member rules emitting
+ * nothing but the compare: a member's compare-miss path falls straight
+ * through to the next rule.
  *
  * @warning L3 and L4 protocol IDs **must** be stored in registers, no on the
  * stack, as older verifier aren't able to keep track of scalar values located
@@ -149,6 +152,14 @@
     ({                                                                         \
         int __r = bf_program_emit_fixup(                                       \
             (program), BF_FIXUP_TYPE_JMP_GUARD_MISS, (insn), NULL);            \
+        if (__r < 0)                                                           \
+            return __r;                                                        \
+    })
+
+#define EMIT_FIXUP_JMP_VERDICT(program, insn)                                  \
+    ({                                                                         \
+        int __r = bf_program_emit_fixup((program), BF_FIXUP_TYPE_JMP_VERDICT,  \
+                                        (insn), NULL);                         \
         if (__r < 0)                                                           \
             return __r;                                                        \
     })
@@ -286,6 +297,28 @@ struct bf_program
          * offset can overflow the 16-bit displacement. */
         size_t start_insn;
     } guard_group;
+
+    /** Codegen-time state of the open verdict run. Consecutive
+     * field-cache-eligible rules carrying the same matcher type and the
+     * same exit verdict form a run: every rule but the last emits a
+     * single compare that jumps to the run's shared `MOV r0` + `EXIT`
+     * block on match and falls through to the next rule on mismatch.
+     * Never serialized. */
+    struct
+    {
+        /** A verdict run is open: JMP_VERDICT fixups are pending. */
+        bool active;
+        /** The rule being generated is a non-closing member: its compare
+         * jumps to the shared verdict block on match and falls through on
+         * mismatch. Consumed by bf_cmp_value(). */
+        bool member;
+        /** Verdict shared by the run's rules. */
+        enum bf_verdict verdict;
+        /** img.size when the run opened, used to force-close the run before
+         * the accumulated match-jump offset can overflow the 16-bit
+         * displacement, mirroring guard_group.start_insn. */
+        size_t start_insn;
+    } verdict_run;
 
     /** Runtime data used to interact with the program and cache information.
      * This data is not serialized. */

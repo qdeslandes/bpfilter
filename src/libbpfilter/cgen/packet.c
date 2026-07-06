@@ -83,6 +83,17 @@
  *
  * 3. Comparison:  A `bf_cmp_*` function compares the value in the
  *    specified register against the matcher's reference payload.
+ *
+ * On top of the pipeline, consecutive cache-eligible rules carrying the
+ * same matcher type and the same exit verdict form a verdict run
+ * (`bf_program.verdict_run`, managed by `_bf_program_generate_rule()`).
+ * Every rule of the run but the last is a member: it emits only an
+ * inverted-polarity compare (`bf_cmp_value()`), whose miss falls through
+ * directly into the next rule's compare — which is why the field cache
+ * stays valid across the run without any jump — and whose match jumps to
+ * the run's shared verdict block, i.e. the closing rule's `MOV r0` +
+ * `EXIT` pair, where all the run's matches converge. Members skip their
+ * private verdict pair entirely.
  */
 
 #define BF_IPV6_EH_HOPOPTS(x) ((x) << 0)
