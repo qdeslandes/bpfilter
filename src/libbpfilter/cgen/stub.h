@@ -77,14 +77,17 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * path.
  *
  * On every path:
- * - The L2 and L3 header addresses are stored in `bf_runtime.l2_hdr` and
- *   `bf_runtime.l3_hdr`, and the L3 header address is pinned in @c r6 for
- *   the program's lifetime
+ * - The L3 header address is stored in `bf_runtime.l3_hdr` and pinned in
+ *   @c r6 for the program's lifetime
  * - The L3 protocol ID (extracted from the ethertype field) is stored in
  *   @c r7 , and the L3 header is processed to extract the offset of the L4
  *   header and the L4 protocol ID
  * - If a slice request fails on the fallback path, the error counter is
  *   updated and the program accepts the packet
+ *
+ * `bf_runtime.l2_hdr`, `bf_runtime.l2_size`, and `bf_runtime.l3_size` are
+ * only written when the chain logs packets ( @c BF_CHAIN_LOG ): the packet
+ * logging ELF stub is their only consumer.
  *
  * If the L3 protocol is not supported, the L4 derivation is skipped and the
  * L3 protocol ID register is set to 0. On that path @c r6 might be left
@@ -104,9 +107,12 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program);
  * - The size of the slice to request depends on the L4 protocol ID stored in @c r8
  * - There is no logic to process the L4 header and determine the L5 protocol
  *
- * Besides storing the header address in `bf_runtime.l4_hdr`, this function
- * pins it in @c r9 for the program's lifetime: @c r9 is callee-saved, so it
- * survives every helper, kfunc, and ELF stub call on the match path.
+ * The header address is pinned in @c r9 for the program's lifetime: @c r9 is
+ * callee-saved, so it survives every helper, kfunc, and ELF stub call on the
+ * match path. The address is also stored in `bf_runtime.l4_hdr` when the
+ * packet logging or flow-hash ELF stubs consume it ( @c BF_CHAIN_LOG or
+ * @c BF_CHAIN_FLOW_HASH ), and the header size in `bf_runtime.l4_size` under
+ * @c BF_CHAIN_LOG only.
  *
  * If the L4 protocol is not supported, this function returns before requesting
  * a dynamic pointer slice, and the L4 protocol ID register is set to 0. On

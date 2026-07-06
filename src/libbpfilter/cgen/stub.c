@@ -111,7 +111,9 @@ int bf_stub_make_ctx_skb_dynptr(struct bf_program *program, int skb_reg)
  * - If the slice creation fails, the error counter is updated and the
  *   program accepts the packet
  * - The header address returned by @c bpf_dynptr_slice is stored in
- *   `bf_runtime.l2_hdr`
+ *   `bf_runtime.l2_hdr`, and the header size in `bf_runtime.l2_size`, only
+ *   when the chain logs packets ( @c BF_CHAIN_LOG ): the packet logging ELF
+ *   stub is their only consumer
  * - The L3 protocol ID (extracted from the ethertype field) is stored in @c r7
  * - The offset of the L3 header is stored in `bf_runtime.l3_offset`
  *
@@ -136,8 +138,11 @@ static int _bf_stub_parse_l2_ethhdr(struct bf_program *program)
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, BF_PROG_CTX_OFF(l2)));
     EMIT(program, BPF_MOV64_IMM(BPF_REG_4, sizeof(struct ethhdr)));
 
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l2_size)));
+    // l2_size is only read by the packet logging ELF stub
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l2_size)));
+    }
 
     EMIT_KFUNC_CALL(program, "bpf_dynptr_slice");
 
@@ -165,9 +170,11 @@ static int _bf_stub_parse_l2_ethhdr(struct bf_program *program)
         EMIT(program, BPF_EXIT_INSN());
     }
 
-    // Store the L2 header address into the runtime context
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l2_hdr)));
+    // l2_hdr is only read by the packet logging ELF stub
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0,
+                                  BF_PROG_CTX_OFF(l2_hdr)));
+    }
 
     // Store the L3 protocol ID in r7
     EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_0,
@@ -280,7 +287,10 @@ static int _bf_stub_slice_l3(struct bf_program *program, struct bf_jmpctx *skip)
  * - IPv6: the next header value is stored in @c r8 ; if extension headers are
  *   present, the EH parsing ELF stub is called to locate the L4 header.
  *
- * `bf_runtime.l3_size` and `bf_runtime.l4_offset` are updated on both paths.
+ * `bf_runtime.l4_offset` is updated on both paths: the L4 slice request and
+ * the EH parsing ELF stubs read it. `bf_runtime.l3_size` is only written when
+ * the chain logs packets ( @c BF_CHAIN_LOG ): the packet logging ELF stub is
+ * its only consumer.
  * Callers must ensure this stub is only reached when @c r7 contains a
  * supported L3 protocol ID (IPv4 or IPv6) and @c r6 points to the L3 header.
  *
@@ -300,8 +310,11 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
 
-        EMIT(program, BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
-                                 sizeof(struct iphdr)));
+        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+            EMIT(program,
+                 BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
+                            sizeof(struct iphdr)));
+        }
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_6, 0));
         EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
         EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
@@ -320,8 +333,11 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
-        EMIT(program, BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
-                                 sizeof(struct ipv6hdr)));
+        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+            EMIT(program,
+                 BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
+                            sizeof(struct ipv6hdr)));
+        }
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                   offsetof(struct ipv6hdr, nexthdr)));
 
@@ -425,11 +441,14 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program)
      * slice requests. */
     shortjmp = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
 
-    // Store the L2 header address and size into the runtime context
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l2_hdr)));
-    EMIT(program,
-         BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), ETH_HLEN));
+    /* l2_hdr and l2_size are only read by the packet logging ELF stub: skip
+     * the stores when the chain doesn't log packets. */
+    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0,
+                                  BF_PROG_CTX_OFF(l2_hdr)));
+        EMIT(program,
+             BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), ETH_HLEN));
+    }
 
     // Store the L3 protocol ID in r7
     EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_0,
@@ -537,8 +556,11 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     }
     _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l4_size)));
+    // l4_size is only read by the packet logging ELF stub
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l4_size)));
+    }
 
     // Call bpf_dynptr_slice()
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
@@ -572,9 +594,12 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
         EMIT(program, BPF_EXIT_INSN());
     }
 
-    // Store the L4 header address into the runtime context
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l4_hdr)));
+    /* l4_hdr is only read by the packet logging and flow-hash ELF stubs:
+     * matchers use the pinned r9 instead. */
+    if (flags & (BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_FLOW_HASH))) {
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0,
+                                  BF_PROG_CTX_OFF(l4_hdr)));
+    }
 
     // Pin the L4 header address in r9 for the program's lifetime
     EMIT(program, BPF_MOV64_REG(BPF_REG_9, BPF_REG_0));

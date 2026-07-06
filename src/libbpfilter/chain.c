@@ -217,9 +217,12 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                 break;
             case BF_MATCHER_META_SPORT:
             case BF_MATCHER_META_DPORT:
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                break;
             case BF_MATCHER_META_FLOW_HASH:
             case BF_MATCHER_META_FLOW_PROBABILITY:
-                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
+                                BF_FLAG(BF_CHAIN_FLOW_HASH);
                 break;
             default:
                 if (meta->layer == BF_MATCHER_LAYER_4)

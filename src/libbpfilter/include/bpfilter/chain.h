@@ -48,11 +48,18 @@ enum bf_chain_flags
     /** A rule will filter on IPv6 nexthdr field. */
     BF_CHAIN_STORE_NEXTHDR,
 
-    /** A rule reads the L4 header slice (r9, l4_hdr, l4_size). */
+    /** A rule reads the L4 header slice: the slice is requested and its
+     * address is pinned in r9. The `l4_hdr` and `l4_size` runtime context
+     * fields are only populated under `BF_CHAIN_LOG` (and `BF_CHAIN_FLOW_HASH`
+     * for `l4_hdr`). */
     BF_CHAIN_NEEDS_L4_HDR,
 
     /** A rule reads the normalized L4 protocol ID (r8). */
     BF_CHAIN_NEEDS_L4_PROTO,
+
+    /** A rule computes the packet's flow hash: the flow-hash ELF stub reads
+     * `l3_hdr` and `l4_hdr` from the runtime context. */
+    BF_CHAIN_FLOW_HASH,
 
     _BF_CHAIN_FLAGS_MAX,
 };

@@ -143,6 +143,9 @@ struct bf_runtime
     /** IPv6 extension header mask */
     __u8 ipv6_eh;
 
+    /* Header sizes are only written when the chain logs packets
+     * (`BF_CHAIN_LOG`): the packet logging ELF stub is their only consumer.
+     * New readers must extend the flag gating in cgen/stub.c. */
     __u8 l2_size;
     __u8 l3_size;
     __u8 l4_size;
@@ -157,13 +160,18 @@ struct bf_runtime
      * output interface. */
     __u32 bf_aligned(8) ifindex;
 
-    /** Pointer to the L2 protocol header (in a dynamic pointer slice). */
+    /** Pointer to the L2 protocol header (in a dynamic pointer slice). Only
+     * written under `BF_CHAIN_LOG`: the packet logging ELF stub is its only
+     * consumer. New readers must extend the flag gating in cgen/stub.c. */
     void *l2_hdr;
 
     /** Pointer to the L3 protocol header (in a dynamic pointer slice). */
     void *l3_hdr;
 
-    /** Pointer to the L4 protocol header (in a dynamic pointer slice). */
+    /** Pointer to the L4 protocol header (in a dynamic pointer slice). Only
+     * written under `BF_CHAIN_LOG` or `BF_CHAIN_FLOW_HASH`: the packet
+     * logging and flow-hash ELF stubs are its only consumers. New readers
+     * must extend the flag gating in cgen/stub.c. */
     void *l4_hdr;
 
     /** Layer 2 header. */
