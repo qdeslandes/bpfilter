@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+struct bf_jmpctx;
 struct bf_matcher_meta;
 struct bf_program;
 
@@ -94,10 +95,27 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * uninitialized: matchers must be guarded by an L3 protocol check on @c r7
  * before reading it.
  *
+ * When the chain consumes the L4 header slice ( @c BF_CHAIN_NEEDS_L4_HDR ),
+ * plain IPv4 packets (IHL == 5) on the combined-slice path take an L4 fast
+ * path: the L4 protocol ID is normalized into @c r8 , @c r9 is pinned
+ * `sizeof(struct iphdr)` bytes into the combined slice (whose remaining bytes
+ * cover the full fixed L4 header of every supported protocol), and
+ * `bf_runtime.l4_hdr` and `bf_runtime.l4_size` are written under the same
+ * chain flags as @ref bf_stub_parse_l4_hdr . The fast path ends with a
+ * forward jump stored in @p l4_done : the caller must close it after the
+ * @ref bf_stub_parse_l4_hdr call, with no instruction emitted in between, so
+ * the fast path skips the dedicated L4 slice request entirely. When the
+ * chain doesn't consume the L4 header slice, no fast path is emitted and
+ * @p l4_done is initialized to a no-op.
+ *
  * @param program Program to emit instructions into.
+ * @param l4_done Jump context over the dedicated L4 slice request,
+ *        initialized by this function and closed by the caller. Can't be
+ *        NULL.
  * @return 0 on success, or negative errno value on error.
  */
-int bf_stub_parse_l2l3_hdr(struct bf_program *program);
+int bf_stub_parse_l2l3_hdr(struct bf_program *program,
+                           struct bf_jmpctx *l4_done);
 
 /**
  * Emit instructions to get a dynptr slice for the packet's L4 header.

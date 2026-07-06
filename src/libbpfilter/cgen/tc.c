@@ -18,6 +18,7 @@
 #include <bpfilter/matcher.h>
 #include <bpfilter/verdict.h>
 
+#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/packet.h"
 #include "cgen/program.h"
@@ -26,6 +27,11 @@
 
 static int _bf_tc_gen_inline_prologue(struct bf_program *program)
 {
+    /* The IPv4 L4 fast path in bf_stub_parse_l2l3_hdr() jumps over the
+     * dedicated L4 slice request: l4_done is closed by the scope cleanup on
+     * return, so no instruction may be emitted between the
+     * bf_stub_parse_l4_hdr() call and the end of this function. */
+    _clean_bf_jmpctx_ struct bf_jmpctx l4_done = bf_jmpctx_default();
     int r;
 
     assert(program);
@@ -54,7 +60,7 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
     if (r)
         return r;
 
-    r = bf_stub_parse_l2l3_hdr(program);
+    r = bf_stub_parse_l2l3_hdr(program, &l4_done);
     if (r)
         return r;
 

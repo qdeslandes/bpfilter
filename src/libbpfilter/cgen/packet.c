@@ -41,7 +41,11 @@
  *    `R6` and the L4 header address in `R9` for the program's lifetime,
  *    so `_bf_matcher_pkt_load_field()` reads the target field directly
  *    from the pinned register returned by `bf_stub_hdr_reg()` (and
- *    `reg+1` for 128-bit values such as IPv6 addresses).
+ *    `reg+1` for 128-bit values such as IPv6 addresses). On the plain
+ *    IPv4 fast path of the L2 flavors, `R9` aliases the combined L2+L3
+ *    slice (`R6 + sizeof(struct iphdr)`) instead of a dedicated L4
+ *    slice; both point to enough verifier-visible bytes for every fixed
+ *    L4 header load.
  *
  * 3. Comparison:  A `bf_cmp_*` function compares the value in the
  *    specified register against the matcher's reference payload.
