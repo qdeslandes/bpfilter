@@ -423,6 +423,7 @@ static int _bf_program_fixup(struct bf_program *program,
 
         switch (type) {
         case BF_FIXUP_TYPE_JMP_NEXT_RULE:
+        case BF_FIXUP_TYPE_JMP_GUARD_MISS:
             insn_type = BF_FIXUP_INSN_OFF;
             value = (int)(program->img.size - fixup->insn - 1U);
             break;
@@ -505,10 +506,124 @@ static int _bf_program_check_proto(struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Protocol guard signature of a rule.
+ *
+ * Mirrors the protocol conditions `_bf_program_check_proto()` would emit
+ * for the rule: for each of layers 3 and 4, whether a guard is emitted and
+ * the protocol ID it tests. Rules with equal signatures establish the same
+ * r7/r8 conditions, so consecutive ones share a guard group.
+ */
+struct bf_guard_sig
+{
+    /** The rule guards on an L3 protocol. */
+    bool has_l3;
+    /** L3 protocol guarded on (`bf_matcher_meta.hdr_id`). */
+    uint16_t l3_proto;
+    /** The rule guards on an L4 protocol. */
+    bool has_l4;
+    /** L4 protocol guarded on (`bf_matcher_meta.hdr_id`). */
+    uint8_t l4_proto;
+};
+
+/**
+ * @brief Fold a matcher type into a rule's guard signature.
+ *
+ * Only the first matcher requiring a given layer contributes to the
+ * signature, mirroring the `checked_layers` dedup in
+ * `_bf_program_generate_rule()`: later matchers on an already-recorded
+ * layer never emit a guard.
+ *
+ * @param sig Signature to update. Can't be NULL.
+ * @param type Matcher type to fold in.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_guard_sig_add(struct bf_guard_sig *sig,
+                             enum bf_matcher_type type)
+{
+    const struct bf_matcher_meta *meta;
+
+    assert(sig);
+
+    meta = bf_matcher_get_meta(type);
+    if (!meta)
+        return bf_err_r(-EINVAL, "missing meta for matcher type %d", type);
+
+    switch (meta->layer) {
+    case BF_MATCHER_LAYER_3:
+        if (!sig->has_l3) {
+            sig->has_l3 = true;
+            sig->l3_proto = (uint16_t)meta->hdr_id;
+        }
+        break;
+    case BF_MATCHER_LAYER_4:
+        if (!sig->has_l4) {
+            sig->has_l4 = true;
+            sig->l4_proto = (uint8_t)meta->hdr_id;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Compute a rule's guard signature, without emitting anything.
+ *
+ * Iterates the rule's matchers the same way the guard-emission loop does,
+ * expanding `BF_MATCHER_SET` matchers into their key components.
+ *
+ * @param program Program the rule belongs to. Can't be NULL.
+ * @param rule Rule to compute the signature of. Can't be NULL.
+ * @param sig On success, the rule's guard signature. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_program_rule_guard_sig(const struct bf_program *program,
+                                      const struct bf_rule *rule,
+                                      struct bf_guard_sig *sig)
+{
+    int r;
+
+    assert(program);
+    assert(rule);
+    assert(sig);
+
+    memset(sig, 0, sizeof(*sig));
+
+    bf_list_foreach (&rule->matchers, matcher_node) {
+        struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
+
+        if (bf_matcher_get_type(matcher) == BF_MATCHER_SET) {
+            const struct bf_set *set =
+                bf_chain_get_set_for_matcher(program->runtime.chain, matcher);
+
+            if (!set) {
+                return bf_err_r(-ENOENT, "rule %u references non-existent set",
+                                rule->index);
+            }
+
+            for (size_t i = 0; i < set->n_comps; ++i) {
+                r = _bf_guard_sig_add(sig, set->key[i]);
+                if (r)
+                    return r;
+            }
+        } else {
+            r = _bf_guard_sig_add(sig, bf_matcher_get_type(matcher));
+            if (r)
+                return r;
+        }
+    }
+
+    return 0;
+}
+
 static int _bf_program_generate_rule(struct bf_program *program,
                                      struct bf_rule *rule)
 {
     uint32_t checked_layers = 0;
+    struct bf_guard_sig sig;
     int ret_code;
     int r = 0;
 
@@ -536,29 +651,64 @@ static int _bf_program_generate_rule(struct bf_program *program,
     if (!program->field_cache.rule_eligible)
         program->field_cache.valid = false;
 
-    bf_list_foreach (&rule->matchers, matcher_node) {
-        struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
+    /* Protocol guard stage: consecutive rules with the same guard
+     * signature share a guard group. Only the first rule of the group
+     * emits the r7/r8 protocol guards (through
+     * `bf_stub_rule_check_protocol()`), and a guard miss jumps past the
+     * whole group: the pending `BF_FIXUP_TYPE_JMP_GUARD_MISS` fixups
+     * resolve when the group closes. In-group rules are entered only from
+     * the previous rule's matcher-miss paths, all of which are post-guard,
+     * so their protocol conditions are already established. The group is
+     * force-closed before the accumulated guard-miss offset can overflow
+     * the jump's 16-bit displacement: the breaking rule re-emits its
+     * guards, and packets on the guard-miss path fail them again, hopping
+     * group to group. */
+    r = _bf_program_rule_guard_sig(program, rule, &sig);
+    if (r)
+        return r;
 
-        if (bf_matcher_get_type(matcher) == BF_MATCHER_SET) {
-            const struct bf_set *set =
-                bf_chain_get_set_for_matcher(program->runtime.chain, matcher);
-
-            if (!set) {
-                return bf_err_r(-ENOENT, "rule %u references non-existent set",
-                                rule->index);
-            }
-
-            for (size_t i = 0; i < set->n_comps && !r; ++i) {
-                r = _bf_program_check_proto(program, set->key[i],
-                                            &checked_layers);
-            }
-        } else {
-            r = _bf_program_check_proto(program, bf_matcher_get_type(matcher),
-                                        &checked_layers);
-        }
-
+    if (!(program->guard_group.active &&
+          program->guard_group.has_l3 == sig.has_l3 &&
+          program->guard_group.l3_proto == sig.l3_proto &&
+          program->guard_group.has_l4 == sig.has_l4 &&
+          program->guard_group.l4_proto == sig.l4_proto &&
+          program->img.size - program->guard_group.start_insn < SHRT_MAX / 2)) {
+        r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_GUARD_MISS);
         if (r)
-            return r;
+            return bf_err_r(r, "failed to generate guard miss fixups");
+
+        program->guard_group.active = true;
+        program->guard_group.has_l3 = sig.has_l3;
+        program->guard_group.l3_proto = sig.l3_proto;
+        program->guard_group.has_l4 = sig.has_l4;
+        program->guard_group.l4_proto = sig.l4_proto;
+        program->guard_group.start_insn = program->img.size;
+
+        bf_list_foreach (&rule->matchers, matcher_node) {
+            struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
+
+            if (bf_matcher_get_type(matcher) == BF_MATCHER_SET) {
+                const struct bf_set *set = bf_chain_get_set_for_matcher(
+                    program->runtime.chain, matcher);
+
+                if (!set) {
+                    return bf_err_r(-ENOENT,
+                                    "rule %u references non-existent set",
+                                    rule->index);
+                }
+
+                for (size_t i = 0; i < set->n_comps && !r; ++i) {
+                    r = _bf_program_check_proto(program, set->key[i],
+                                                &checked_layers);
+                }
+            } else {
+                r = _bf_program_check_proto(
+                    program, bf_matcher_get_type(matcher), &checked_layers);
+            }
+
+            if (r)
+                return r;
+        }
     }
 
     bf_list_foreach (&rule->matchers, matcher_node) {
@@ -888,6 +1038,14 @@ int bf_program_generate(struct bf_program *program)
         if (r)
             return r;
     }
+
+    /* Close the trailing guard group: pending guard-miss jumps resolve to
+     * the chain-policy path, the same convergence point as the last rule's
+     * next-rule jumps. */
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_GUARD_MISS);
+    if (r)
+        return bf_err_r(r, "failed to generate guard miss fixups");
+    program->guard_group.active = false;
 
     r = program->runtime.ops->gen_inline_epilogue(program);
     if (r)

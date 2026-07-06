@@ -1158,12 +1158,12 @@ int bf_stub_rule_check_protocol(struct bf_program *program,
 
     switch (meta->layer) {
     case BF_MATCHER_LAYER_3:
-        EMIT_FIXUP_JMP_NEXT_RULE(
+        EMIT_FIXUP_JMP_GUARD_MISS(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7,
                                  htobe16((uint16_t)meta->hdr_id), 0));
         break;
     case BF_MATCHER_LAYER_4:
-        EMIT_FIXUP_JMP_NEXT_RULE(
+        EMIT_FIXUP_JMP_GUARD_MISS(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_8, (uint8_t)meta->hdr_id, 0));
         break;
     default:

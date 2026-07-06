@@ -145,6 +145,14 @@
             return __r;                                                        \
     })
 
+#define EMIT_FIXUP_JMP_GUARD_MISS(program, insn)                               \
+    ({                                                                         \
+        int __r = bf_program_emit_fixup(                                       \
+            (program), BF_FIXUP_TYPE_JMP_GUARD_MISS, (insn), NULL);            \
+        if (__r < 0)                                                           \
+            return __r;                                                        \
+    })
+
 #define EMIT_LOAD_COUNTERS_FD_FIXUP(program, reg)                              \
     ({                                                                         \
         const struct bpf_insn ld_insn[2] = {BPF_LD_MAP_FD(reg, 0)};            \
@@ -252,6 +260,32 @@ struct bf_program
          * guard protocol, offset, and size). */
         enum bf_matcher_type type;
     } field_cache;
+
+    /** Codegen-time state of the open protocol guard group. Consecutive
+     * rules with the same guard signature form a group: only the first
+     * rule emits the r7/r8 protocol guards, and a guard miss jumps past
+     * the whole group. Deduplicating the guards is sound because r7 and
+     * r8 are written only by the prologue parsing stubs: matcher and
+     * verdict codegen never clobber them, and both registers are
+     * callee-saved through every helper, kfunc, and ELF stub call. Never
+     * serialized. */
+    struct
+    {
+        /** A guard group is open. */
+        bool active;
+        /** The group's rules guard on an L3 protocol. */
+        bool has_l3;
+        /** L3 protocol guarded on (`bf_matcher_meta.hdr_id`). */
+        uint16_t l3_proto;
+        /** The group's rules guard on an L4 protocol. */
+        bool has_l4;
+        /** L4 protocol guarded on (`bf_matcher_meta.hdr_id`). */
+        uint8_t l4_proto;
+        /** `img.size` when the group's guards were emitted, used to
+         * force-close the group before the accumulated guard-miss jump
+         * offset can overflow the 16-bit displacement. */
+        size_t start_insn;
+    } guard_group;
 
     /** Runtime data used to interact with the program and cache information.
      * This data is not serialized. */

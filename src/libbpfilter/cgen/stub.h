@@ -212,9 +212,12 @@ int bf_stub_parse_l4_hdr(struct bf_program *program);
  * @brief Emit the instructions to check if the packet contains a specific
  *        protocol.
  *
- * This stub is usually emitted at the beginning of a rule, to ensure the
- * protocol this rule applies to is actually available in the packet. If not,
- * the rule is skipped.
+ * This stub is emitted at the beginning of the first rule of a guard group,
+ * to ensure the protocol the group's rules apply to is actually available in
+ * the packet. On a protocol mismatch, the emitted jump resolves to the end of
+ * the current guard group (see `bf_program.guard_group`), not to the next
+ * rule: consecutive rules with the same guard signature are skipped as a
+ * whole.
  *
  * @param program Program to emit the instructions into. Can't be NULL.
  * @param meta Metadata for the matcher type to apply. Can't be NULL.

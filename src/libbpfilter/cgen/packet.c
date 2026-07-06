@@ -35,7 +35,11 @@
  *
  * 1. Protocol check: `_bf_program_generate_rule()` (in program.c)
  *    emits deduplicated protocol guards before the matcher loop,
- *    so each L3/L4 protocol is verified at most once per rule.
+ *    so each L3/L4 protocol is verified at most once per rule. Guards
+ *    are further deduplicated across rules: consecutive rules with the
+ *    same guard signature form a guard group where only the first rule
+ *    emits the guards (`r7`/`r8` are invariant after the prologue), and
+ *    a guard miss jumps past the whole group.
  *
  * 2. Field load:  the prologue parse stubs pin the L3 header address in
  *    `R6` and the L4 header address in `R9` for the program's lifetime,
@@ -51,19 +55,29 @@
  *    `bf_program.field_cache` records that the previous rule left the
  *    same field in `R1`/`R2`. This is sound because:
  *    - `BF_FIXUP_TYPE_JMP_NEXT_RULE` fixups always resolve to the start
- *      of the immediately following rule, so a rule is only entered from
- *      the rule right before it.
+ *      of the immediately following rule, and guard-miss jumps resolve
+ *      to the point where their guard group closes, before the closing
+ *      rule's own guards: a rule is entered either from the rule right
+ *      before it, or, when it opens a guard group, from earlier
+ *      guard-miss jumps landing on its guards.
  *    - A cache-eligible rule (single cacheable matcher, no log, no
  *      counters, no mark, exit verdict; enforced by
- *      `_bf_program_generate_rule()`) emits exactly: protocol guard(s),
- *      field load, non-mutating compare(s), and `MOV r0` + `EXIT`. Its
- *      only jumps to the next rule are the guard (field not loaded) and
- *      the compare (field loaded).
- *    - Both rules carry the same matcher type, hence the identical guard
- *      derived from the same `bf_matcher_meta`. On the path where the
- *      producer's guard failed, the consumer's identical guard fails
- *      too, so the stale register is never read. On every path reaching
- *      the consumer's compare, the load was executed.
+ *      `_bf_program_generate_rule()`) emits exactly: protocol guard(s)
+ *      (elided when the rule sits inside an open guard group), field
+ *      load, non-mutating compare(s), and `MOV r0` + `EXIT`. Its only
+ *      jumps out are the guard miss (field not loaded, jumps past the
+ *      whole guard group) and the compare miss (field loaded, jumps to
+ *      the next rule).
+ *    - Both rules carry a single matcher of the same type, hence the
+ *      same guard signature derived from the same `bf_matcher_meta`,
+ *      hence sit in the same guard group: the producer's guard-miss path
+ *      jumps past the consumer entirely, so every path reaching the
+ *      consumer's compare runs through the producer's compare-miss path,
+ *      where the field was loaded. On a forced guard group break (jump
+ *      displacement threshold), the consumer re-emits guards identical
+ *      to the producer's: on the path where the producer's guard failed,
+ *      the consumer's guard fails too, so the stale register is never
+ *      read.
  *    - The eligibility conditions exclude every helper/kfunc/ELF-stub
  *      call and `R1`/`R2` mutation between the load and the reuse.
  *

@@ -31,6 +31,10 @@ enum bf_fixup_type
 {
     /// Jump to the beginning of the next rule.
     BF_FIXUP_TYPE_JMP_NEXT_RULE,
+    /** Jump to the end of the current guard group. Resolved lazily when the
+     * group closes, unlike @c BF_FIXUP_TYPE_JMP_NEXT_RULE which resolves at
+     * the end of every rule. */
+    BF_FIXUP_TYPE_JMP_GUARD_MISS,
     /// Set the counters map file descriptor in the @c BPF_LD_MAP_FD instruction.
     BF_FIXUP_TYPE_COUNTERS_MAP_FD,
     /// Set the printer map file descriptor in the @c BPF_LD_MAP_FD instruction.
