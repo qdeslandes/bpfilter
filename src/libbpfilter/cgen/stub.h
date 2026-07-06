@@ -97,6 +97,14 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * that path @c r9 is left uninitialized: matchers must be guarded by an L4
  * protocol check on @c r8 before reading it.
  *
+ * The emitted bytecode depends on the chain's flags:
+ * - @c BF_CHAIN_NEEDS_L4_HDR: the full L4 parsing described above is emitted.
+ * - @c BF_CHAIN_NEEDS_L4_PROTO only: @c r8 is reset to 0 for unsupported
+ *   protocols, but no header slice is requested and @c r9,
+ *   `bf_runtime.l4_hdr`, and `bf_runtime.l4_size` are left unwritten.
+ * - Neither: no instruction is emitted, and @c r8 keeps the raw nexthdr value
+ *   from the L3 parsing.
+ *
  * @param program Program to emit instructions into.
  * @return 0 on success, or negative errno value on error.
  */

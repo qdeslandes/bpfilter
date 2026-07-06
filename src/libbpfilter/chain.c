@@ -178,8 +178,10 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
             bf_hook_to_str(chain->hook));
     }
 
+    /* The packet logging ELF stub reads the L4 header from the runtime
+     * context, so logging rules require the L4 header to be parsed. */
     if (rule->log && !rule->disabled)
-        chain->flags |= BF_FLAG(BF_CHAIN_LOG);
+        chain->flags |= BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
 
     if (rule->log && rule->log_rate_ns && !rule->disabled)
         chain->flags |= BF_FLAG(BF_CHAIN_LOG_RATELIMIT);
@@ -195,16 +197,35 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
         const struct bf_matcher_meta *meta;
 
-        // Track if the chain uses IPv6 nexthdr matcher.
-        if (bf_matcher_get_type(matcher) == BF_MATCHER_IP6_NEXTHDR &&
-            !rule->disabled)
-            chain->flags |= BF_FLAG(BF_CHAIN_STORE_NEXTHDR);
-
         // Ensure the matcher is compatible with the chain's hook.
         meta = bf_matcher_get_meta(bf_matcher_get_type(matcher));
         if (!meta) {
             return bf_err_r(-EINVAL, "unknown matcher type %d in rule",
                             bf_matcher_get_type(matcher));
+        }
+
+        /* Track which prologue features the matchers rely on: IPv6 nexthdr
+         * storage, the L4 header slice, and the normalized L4 protocol ID. */
+        if (!rule->disabled) {
+            switch (bf_matcher_get_type(matcher)) {
+            case BF_MATCHER_IP6_NEXTHDR:
+                chain->flags |= BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
+                                BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
+                break;
+            case BF_MATCHER_META_L4_PROTO:
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
+                break;
+            case BF_MATCHER_META_SPORT:
+            case BF_MATCHER_META_DPORT:
+            case BF_MATCHER_META_FLOW_HASH:
+            case BF_MATCHER_META_FLOW_PROBABILITY:
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                break;
+            default:
+                if (meta->layer == BF_MATCHER_LAYER_4)
+                    chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                break;
+            }
         }
 
         if (meta->unsupported_hooks & BF_FLAG(chain->hook)) {
@@ -239,6 +260,9 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                                     bf_matcher_type_to_str(set->key[i]),
                                     bf_hook_to_str(chain->hook));
                 }
+
+                if (comp_meta->layer == BF_MATCHER_LAYER_4 && !rule->disabled)
+                    chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
             }
         }
     }

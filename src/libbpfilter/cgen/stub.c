@@ -327,10 +327,37 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
 int bf_stub_parse_l4_hdr(struct bf_program *program)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
+    uint8_t flags;
     int ret_code;
     int r;
 
     assert(program);
+
+    flags = program->runtime.chain->flags;
+
+    /* If no rule reads the L4 header slice nor the normalized L4 protocol ID,
+     * skip the L4 parsing entirely: r8 keeps the raw nexthdr value from the L3
+     * parsing, and r9, l4_hdr, and l4_size are left unwritten. */
+    if (!(flags &
+          (BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) | BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO))))
+        return 0;
+
+    /* If only the normalized L4 protocol ID is read, reset r8 to 0 for
+     * unsupported protocols but skip the header slice request. */
+    if (!(flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR))) {
+        _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 0));
+        _clean_bf_jmpctx_ struct bf_jmpctx j1 = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_UDP, 0));
+        _clean_bf_jmpctx_ struct bf_jmpctx j2 = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMP, 0));
+        _clean_bf_jmpctx_ struct bf_jmpctx j3 = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_ICMPV6, 0));
+
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+
+        return 0;
+    }
 
     /* Parse the L4 protocol and handle unuspported protocol, similarly to
      * bf_stub_parse_l3_hdr() above. */

@@ -30,6 +30,9 @@ struct bf_set;
  * runtime context. This pointer should not be populated if no rule is has a
  * 'log' instruction.
  *
+ * Similarly, the L4 header slice and the normalized L4 protocol ID are only
+ * computed in the program's prologue if a rule consumes them.
+ *
  * Grouping the list of required features at the chain level prevents us from
  * parsing all the rules and matchers everytime the feature would affect the
  * bytecode.
@@ -44,6 +47,12 @@ enum bf_chain_flags
 
     /** A rule will filter on IPv6 nexthdr field. */
     BF_CHAIN_STORE_NEXTHDR,
+
+    /** A rule reads the L4 header slice (r9, l4_hdr, l4_size). */
+    BF_CHAIN_NEEDS_L4_HDR,
+
+    /** A rule reads the normalized L4 protocol ID (r8). */
+    BF_CHAIN_NEEDS_L4_PROTO,
 
     _BF_CHAIN_FLAGS_MAX,
 };
