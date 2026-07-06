@@ -54,11 +54,7 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
     if (r)
         return r;
 
-    r = bf_stub_parse_l2_ethhdr(program);
-    if (r)
-        return r;
-
-    r = bf_stub_parse_l3_hdr(program);
+    r = bf_stub_parse_l2l3_hdr(program);
     if (r)
         return r;
 

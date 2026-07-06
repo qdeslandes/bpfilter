@@ -6,6 +6,9 @@
 #pragma once
 
 #include <linux/bpf.h>
+#include <linux/if_ether.h>
+
+#include <stddef.h>
 
 #include <bpfilter/runtime.h>
 
@@ -178,6 +181,16 @@ struct bf_runtime
 
 static_assert(sizeof(struct bf_runtime) % 8 == 0,
               "bf_runtime should be aligned to 8 bytes");
+
+/* bf_stub_parse_l2l3_hdr() requests a single ETH_HLEN + BF_L3_SLICE_LEN bytes
+ * slice using the contiguous l2 and l3 arrays as its bounce buffer: l3 must
+ * immediately follow l2, and both areas together must be large enough for the
+ * combined slice. */
+static_assert(offsetof(struct bf_runtime, l3) ==
+                  offsetof(struct bf_runtime, l2) + BF_L2_SLICE_LEN,
+              "l3 slice area must immediately follow the l2 slice area");
+static_assert(ETH_HLEN + BF_L3_SLICE_LEN <= BF_L2_SLICE_LEN + BF_L3_SLICE_LEN,
+              "combined L2+L3 slice must fit in the l2 and l3 slice areas");
 
 extern void *bpf_dynptr_slice(const struct bpf_dynptr *, __u32, void *, __u32);
 extern int bpf_dynptr_from_xdp(struct xdp_md *, __u64, struct bpf_dynptr *);

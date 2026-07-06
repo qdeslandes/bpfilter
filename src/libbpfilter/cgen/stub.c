@@ -102,7 +102,26 @@ int bf_stub_make_ctx_skb_dynptr(struct bf_program *program, int skb_reg)
     return _bf_stub_make_ctx_dynptr(program, skb_reg, "bpf_dynptr_from_skb");
 }
 
-int bf_stub_parse_l2_ethhdr(struct bf_program *program)
+/**
+ * Emit instructions to get a dynptr slice for the packet's L2 Ethernet
+ * header.
+ *
+ * The Ethernet header is processed the following way:
+ * - Create a BPF dynamic pointer slice for the header.
+ * - If the slice creation fails, the error counter is updated and the
+ *   program accepts the packet
+ * - The header address returned by @c bpf_dynptr_slice is stored in
+ *   `bf_runtime.l2_hdr`
+ * - The L3 protocol ID (extracted from the ethertype field) is stored in @c r7
+ * - The offset of the L3 header is stored in `bf_runtime.l3_offset`
+ *
+ * This stub is only used on the @ref bf_stub_parse_l2l3_hdr fallback path,
+ * when the packet is too short for the combined L2+L3 slice request.
+ *
+ * @param program Program to emit instructions into.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_stub_parse_l2_ethhdr(struct bf_program *program)
 {
     int ret_code;
     int r;
@@ -161,13 +180,32 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program)
     return 0;
 }
 
-int bf_stub_parse_l3_hdr(struct bf_program *program)
+/**
+ * @brief Emit the L3 header slice request.
+ *
+ * The size of the requested slice depends on the L3 protocol ID stored in
+ * @c r7 : 20 bytes for IPv4, 40 bytes for IPv6. For any other protocol, @c r7
+ * is set to 0 and @p skip is initialized with a jump over the slice request:
+ * the caller is responsible for closing @p skip , so the jump can span the L4
+ * derivation logic emitted after this stub.
+ *
+ * The slice offset is read from `bf_runtime.l3_offset`. On success, the
+ * header address is stored in `bf_runtime.l3_hdr` and pinned in @c r6 . If
+ * the slice request fails, the error counter is updated and the program
+ * accepts the packet.
+ *
+ * @param program Program to emit instructions into. Can't be NULL.
+ * @param skip Jump context for the unsupported L3 protocol case, initialized
+ *        by this function and closed by the caller. Can't be NULL.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_stub_slice_l3(struct bf_program *program, struct bf_jmpctx *skip)
 {
-    _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_default();
     int ret_code;
     int r;
 
     assert(program);
+    assert(skip);
 
     /* Store the size of the L3 protocol header in r4, depending on the protocol
      * ID stored in r7. If the protocol is not supported, we store 0 into r7
@@ -186,10 +224,7 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         if (r)
             return r;
     }
-    _ = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
-
-    EMIT(program,
-         BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(l3_size)));
+    *skip = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 0));
 
     // Call bpf_dynptr_slice()
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
@@ -232,23 +267,49 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
      * emitted on the match path. */
     EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_0));
 
-    /* Unsupported L3 protocols have been filtered out at the beginning of this
-     * function and would jump over the block below, so there is no need to
-     * worry about them here. */
+    return 0;
+}
+
+/**
+ * @brief Emit the L4 offset and protocol derivation from the L3 header.
+ *
+ * The L3 header is read through @c r6 , pinned by the slice stage. Depending
+ * on the L3 protocol ID stored in @c r7 :
+ * - IPv4: the L4 offset is computed from the IHL field, and the L4 protocol
+ *   ID is stored in @c r8 .
+ * - IPv6: the next header value is stored in @c r8 ; if extension headers are
+ *   present, the EH parsing ELF stub is called to locate the L4 header.
+ *
+ * `bf_runtime.l3_size` and `bf_runtime.l4_offset` are updated on both paths.
+ * Callers must ensure this stub is only reached when @c r7 contains a
+ * supported L3 protocol ID (IPv4 or IPv6) and @c r6 points to the L3 header.
+ *
+ * @param program Program to emit instructions into. Can't be NULL.
+ * @param l3_offset Offset of the L3 header in the packet, known at generation
+ *        time: `ETH_HLEN` for flavors with an L2 header, 0 otherwise. The EH
+ *        parsing ELF stubs read `bf_runtime.l3_offset`, so the context field
+ *        must be populated with the same value.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
+{
+    assert(program);
+
     {
         // IPv4
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
 
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_0, 0));
+        EMIT(program, BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
+                                 sizeof(struct iphdr)));
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_6, 0));
         EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
         EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                  BF_PROG_CTX_OFF(l3_offset)));
-        EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2));
+        if (l3_offset)
+            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
         EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
                                   BF_PROG_CTX_OFF(l4_offset)));
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                   offsetof(struct iphdr, protocol)));
     }
 
@@ -259,7 +320,9 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_0,
+        EMIT(program, BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
+                                 sizeof(struct ipv6hdr)));
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                   offsetof(struct ipv6hdr, nexthdr)));
 
         /* Fast path for TCP and UDP: quickly recognize the most used protocol
@@ -311,15 +374,108 @@ int bf_stub_parse_l3_hdr(struct bf_program *program)
         bf_jmpctx_cleanup(&noehjmp);
 
         // Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr)
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10,
-                                  BF_PROG_CTX_OFF(l3_offset)));
-        EMIT(program,
-             BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, sizeof(struct ipv6hdr)));
-        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2,
-                                  BF_PROG_CTX_OFF(l4_offset)));
+        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
+                                 l3_offset + sizeof(struct ipv6hdr)));
 
         bf_jmpctx_cleanup(&ehjmp);
     }
+
+    return 0;
+}
+
+int bf_stub_parse_l3_hdr(struct bf_program *program)
+{
+    _clean_bf_jmpctx_ struct bf_jmpctx skip = bf_jmpctx_default();
+    int r;
+
+    assert(program);
+
+    r = _bf_stub_slice_l3(program, &skip);
+    if (r)
+        return r;
+
+    // The L3 header is located at the very beginning of the packet data
+    return _bf_stub_derive_l4(program, 0);
+}
+
+int bf_stub_parse_l2l3_hdr(struct bf_program *program)
+{
+    _clean_bf_jmpctx_ struct bf_jmpctx l3skip = bf_jmpctx_default();
+    struct bf_jmpctx shortjmp, ip4jmp, ip6jmp, endjmp;
+    int r;
+
+    assert(program);
+
+    /* Request a single slice covering the Ethernet header and the largest
+     * supported L3 header: any Ethernet frame carrying a full IPv6 header,
+     * and any frame padded to the Ethernet minimum size, satisfies the
+     * request, so both header pointers are derived from a single kfunc call.
+     * The bounce buffer spans the contiguous l2 and l3 runtime context areas
+     * (see the static_assert in cgen/runtime.h). */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(dynptr)));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_2, 0));
+    EMIT(program, BPF_MOV64_REG(BPF_REG_3, BPF_REG_10));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_3, BF_PROG_CTX_OFF(l2)));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_4, ETH_HLEN + BF_L3_SLICE_LEN));
+    EMIT_KFUNC_CALL(program, "bpf_dynptr_slice");
+
+    /* A NULL slice is not an error here: the packet is smaller than
+     * ETH_HLEN + BF_L3_SLICE_LEN bytes, fall back to separate L2 and L3
+     * slice requests. */
+    shortjmp = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
+
+    // Store the L2 header address and size into the runtime context
+    EMIT(program,
+         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, BF_PROG_CTX_OFF(l2_hdr)));
+    EMIT(program,
+         BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), ETH_HLEN));
+
+    // Store the L3 protocol ID in r7
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_0,
+                              offsetof(struct ethhdr, h_proto)));
+
+    // Set bf_runtime.l3_offset
+    EMIT(program,
+         BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), ETH_HLEN));
+
+    /* Pin the L3 header address in r6 for the program's lifetime and store it
+     * into the runtime context. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_0));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_6, ETH_HLEN));
+    EMIT(program,
+         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_6, BF_PROG_CTX_OFF(l3_hdr)));
+
+    /* Supported L3 protocols jump over the fallback block, straight to the
+     * L4 derivation. Unsupported protocols set r7 to 0 (matching the swich
+     * default semantics of the fallback) and jump to the end of the stub. */
+    ip4jmp = bf_jmpctx_get(
+        program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IP), 0));
+    ip6jmp = bf_jmpctx_get(
+        program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+    endjmp = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    // Fallback for short packets: separate L2 and L3 slice requests
+    bf_jmpctx_cleanup(&shortjmp);
+
+    r = _bf_stub_parse_l2_ethhdr(program);
+    if (r)
+        return r;
+
+    r = _bf_stub_slice_l3(program, &l3skip);
+    if (r)
+        return r;
+
+    // Both paths converge on the shared L4 derivation stage
+    bf_jmpctx_cleanup(&ip4jmp);
+    bf_jmpctx_cleanup(&ip6jmp);
+
+    r = _bf_stub_derive_l4(program, ETH_HLEN);
+    if (r)
+        return r;
+
+    bf_jmpctx_cleanup(&endjmp);
 
     return 0;
 }

@@ -39,30 +39,14 @@ int bf_stub_make_ctx_xdp_dynptr(struct bf_program *program, int md_reg);
 int bf_stub_make_ctx_skb_dynptr(struct bf_program *program, int skb_reg);
 
 /**
- * Emit instructions to get a dynptr slice for the packet's L2 Ethernet
- * header.
+ * Emit instructions to get a dynptr slice for the packet's L3 header.
  *
- * The Ethernet header is processed the following way:
- * - Create a BPF dynamic pointer slice for the header.
+ * This stub is used by flavors where the packet data starts at the L3 header
+ * (no L2 header). The L3 header is processed the following way:
+ * - Create a BPF dynamic pointer slice for the header. The size of the slice
+ *   to request depends on the L3 protocol ID stored in @c r7
  * - If the slice creation fails, the error counter is updated and the
  *   program accepts the packet
- * - The header address returned by @c bpf_dynptr_slice is stored in
- *   `bf_runtime.l2_hdr`
- * - The L3 protocol ID (extracted from the ethertype field) is stored in @c r7
- * - The offset of the L3 header is stored in  `bf_runtime.l2_offset`
- *
- * @param program Program to emit instructions into.
- * @return 0 on success, or negative errno value on error.
- */
-int bf_stub_parse_l2_ethhdr(struct bf_program *program);
-
-/**
- * Emit instructions to get a dynptr slice for the packet's L3 IPv4
- * header.
- *
- * This function behaves similarly to @ref bf_stub_parse_l2_ethhdr but for the
- * L3 header, with the following differences:
- * - The size of the slice to request depends on the L3 protocol ID stored in @c r7
  * - Once the slice has been requested, the L3 header is processed to extract
  *   the offset of the L4 header and the L4 protocol ID
  *
@@ -70,8 +54,8 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program);
  * pins it in @c r6 for the program's lifetime: @c r6 is callee-saved, so it
  * survives every helper, kfunc, and ELF stub call on the match path.
  *
- * If the L3 protocol is not supported, this function returns before requesting
- * a dynamic pointer slice, and the L3 protocol ID register is set to 0. On
+ * If the L3 protocol is not supported, the slice request and the L4
+ * derivation are skipped, and the L3 protocol ID register is set to 0. On
  * that path @c r6 is left uninitialized: matchers must be guarded by an L3
  * protocol check on @c r7 before reading it.
  *
@@ -81,9 +65,41 @@ int bf_stub_parse_l2_ethhdr(struct bf_program *program);
 int bf_stub_parse_l3_hdr(struct bf_program *program);
 
 /**
+ * Emit instructions to parse the packet's L2 Ethernet header and L3 header
+ * from a single dynptr slice.
+ *
+ * A single `ETH_HLEN + BF_L3_SLICE_LEN` bytes slice is requested at the
+ * beginning of the packet, covering the Ethernet header and the largest
+ * supported L3 header, so both header pointers are derived from a single
+ * kfunc call. If the packet is too short for the combined request (e.g. an
+ * unpadded small IPv4 datagram on TC egress), the stub falls back to separate
+ * L2 and L3 slice requests, preserving the exact semantics of the combined
+ * path.
+ *
+ * On every path:
+ * - The L2 and L3 header addresses are stored in `bf_runtime.l2_hdr` and
+ *   `bf_runtime.l3_hdr`, and the L3 header address is pinned in @c r6 for
+ *   the program's lifetime
+ * - The L3 protocol ID (extracted from the ethertype field) is stored in
+ *   @c r7 , and the L3 header is processed to extract the offset of the L4
+ *   header and the L4 protocol ID
+ * - If a slice request fails on the fallback path, the error counter is
+ *   updated and the program accepts the packet
+ *
+ * If the L3 protocol is not supported, the L4 derivation is skipped and the
+ * L3 protocol ID register is set to 0. On that path @c r6 might be left
+ * uninitialized: matchers must be guarded by an L3 protocol check on @c r7
+ * before reading it.
+ *
+ * @param program Program to emit instructions into.
+ * @return 0 on success, or negative errno value on error.
+ */
+int bf_stub_parse_l2l3_hdr(struct bf_program *program);
+
+/**
  * Emit instructions to get a dynptr slice for the packet's L4 header.
  *
- * This function behaves similarly to @ref bf_stub_parse_l2_ethhdr but for the
+ * This function behaves similarly to @ref bf_stub_parse_l3_hdr but for the
  * L4 header, with the following differences:
  * - The size of the slice to request depends on the L4 protocol ID stored in @c r8
  * - There is no logic to process the L4 header and determine the L5 protocol
