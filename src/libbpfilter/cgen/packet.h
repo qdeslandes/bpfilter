@@ -5,9 +5,28 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 struct bf_matcher;
 struct bf_program;
 struct bf_rule;
+
+/**
+ * @brief Check whether a matcher's codegen is compatible with the cross-rule
+ * packet field cache.
+ *
+ * A matcher is cacheable if its bytecode is a plain field load followed by a
+ * non-mutating compare: the loaded value survives in `r1` (and `r2` for
+ * 128-bit fields) when the compare jumps to the next rule. Matchers that
+ * modify the loaded registers (network masking, port byte-swap, bitfield
+ * `AND`), call into helpers or ELF stubs (sets), or don't read from the
+ * pinned header registers (meta matchers) are excluded.
+ *
+ * @param matcher Matcher to check. Can't be NULL.
+ * @return True if the matcher's codegen can consume and publish the field
+ *         cache, false otherwise.
+ */
+bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher);
 
 /**
  * @brief Generate bytecode for a packet-based matcher.

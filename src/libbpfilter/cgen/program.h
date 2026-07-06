@@ -15,6 +15,7 @@
 #include <bpfilter/elfstub.h>
 #include <bpfilter/flavor.h>
 #include <bpfilter/helper.h>
+#include <bpfilter/matcher.h>
 #include <bpfilter/pack.h>
 
 #include "cgen/fixup.h"
@@ -55,6 +56,13 @@
  * This convention is followed throughout the project and must be followed all
  * the time to prevent incompatibilities. Debugging this kind of issues is not
  * fun, so stick to it.
+ *
+ * @c r1 (and @c r2 for 128-bit fields) may carry a cached packet field
+ * across consecutive rule boundaries: `cgen/packet.c` skips a matcher's
+ * field load when `bf_program.field_cache` records that the previous rule
+ * left the same field there. Any new cross-rule codegen clobbering @c r1
+ * to @c r5 between a rule's compare and the next rule's matcher must
+ * invalidate `bf_program.field_cache`.
  *
  * @warning L3 and L4 protocol IDs **must** be stored in registers, no on the
  * stack, as older verifier aren't able to keep track of scalar values located
@@ -230,6 +238,20 @@ struct bf_program
      * group of its own. A set's position within a group is its bit index
      * in the map's bitmask value. Not serialized. */
     bf_list set_groups;
+
+    /** Codegen-time cache of the packet field held in r1 (and r2 for 128-bit
+     * fields) across rule boundaries. Only maintained by the packet-flavor
+     * matcher codegen in cgen/packet.c; never serialized. */
+    struct
+    {
+        /** r1/r2 hold the field loaded by `type`'s matcher codegen. */
+        bool valid;
+        /** The rule being generated may consume and publish the cache. */
+        bool rule_eligible;
+        /** Matcher type identifying the cached field (meta gives the layer,
+         * guard protocol, offset, and size). */
+        enum bf_matcher_type type;
+    } field_cache;
 
     /** Runtime data used to interact with the program and cache information.
      * This data is not serialized. */

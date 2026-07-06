@@ -45,6 +45,7 @@
 #include "cgen/handle.h"
 #include "cgen/jmp.h"
 #include "cgen/nf.h"
+#include "cgen/packet.h"
 #include "cgen/printer.h"
 #include "cgen/prog/link.h"
 #include "cgen/prog/map.h"
@@ -518,6 +519,22 @@ static int _bf_program_generate_rule(struct bf_program *program,
 
     if (rule->disabled)
         return 0;
+
+    /* A rule may consume and publish the r1/r2 field cache (see the
+     * pipeline comment in cgen/packet.c) only if its whole body is a
+     * single cacheable matcher followed by an exiting verdict: log,
+     * counters, mark, and REDIRECT emit helper/kfunc/ELF-stub calls that
+     * clobber r1-r5, and CONTINUE falls through to the next rule after a
+     * match, with register state diverging from the compare-miss path. */
+    program->field_cache.rule_eligible =
+        bf_list_size(&rule->matchers) == 1 &&
+        bf_packet_matcher_is_cacheable(
+            bf_list_node_get_data(bf_list_get_head(&rule->matchers))) &&
+        !rule->log && !rule->has_counters && !bf_rule_mark_is_set(rule) &&
+        (rule->verdict == BF_VERDICT_ACCEPT ||
+         rule->verdict == BF_VERDICT_DROP || rule->verdict == BF_VERDICT_NEXT);
+    if (!program->field_cache.rule_eligible)
+        program->field_cache.valid = false;
 
     bf_list_foreach (&rule->matchers, matcher_node) {
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);

@@ -47,6 +47,26 @@
  *    slice; both point to enough verifier-visible bytes for every fixed
  *    L4 header load.
  *
+ *    `_bf_matcher_pkt_load_and_cmp()` skips the load entirely when
+ *    `bf_program.field_cache` records that the previous rule left the
+ *    same field in `R1`/`R2`. This is sound because:
+ *    - `BF_FIXUP_TYPE_JMP_NEXT_RULE` fixups always resolve to the start
+ *      of the immediately following rule, so a rule is only entered from
+ *      the rule right before it.
+ *    - A cache-eligible rule (single cacheable matcher, no log, no
+ *      counters, no mark, exit verdict; enforced by
+ *      `_bf_program_generate_rule()`) emits exactly: protocol guard(s),
+ *      field load, non-mutating compare(s), and `MOV r0` + `EXIT`. Its
+ *      only jumps to the next rule are the guard (field not loaded) and
+ *      the compare (field loaded).
+ *    - Both rules carry the same matcher type, hence the identical guard
+ *      derived from the same `bf_matcher_meta`. On the path where the
+ *      producer's guard failed, the consumer's identical guard fails
+ *      too, so the stale register is never read. On every path reaching
+ *      the consumer's compare, the load was executed.
+ *    - The eligibility conditions exclude every helper/kfunc/ELF-stub
+ *      call and `R1`/`R2` mutation between the load and the reuse.
+ *
  * 3. Comparison:  A `bf_cmp_*` function compares the value in the
  *    specified register against the matcher's reference payload.
  */
@@ -117,6 +137,35 @@ static int _bf_matcher_pkt_load(struct bf_program *program,
     return _bf_matcher_pkt_load_field(program, meta, src_reg, reg);
 }
 
+bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
+{
+    assert(matcher);
+
+    if (bf_matcher_get_op(matcher) != BF_MATCHER_EQ)
+        return false;
+
+    /* Only matchers dispatched to `_bf_matcher_pkt_load_and_cmp()`: every
+     * `bf_cmp_value()` size path they use (1, 2, 4, and 16 bytes) leaves
+     * the loaded registers unmodified (the 16-byte compare loads its
+     * reference into `r3`, the smaller compares use immediates). The
+     * `negate` flag only flips the jump opcode, so negated matchers
+     * remain cacheable. */
+    switch (bf_matcher_get_type(matcher)) {
+    case BF_MATCHER_IP4_SADDR:
+    case BF_MATCHER_IP4_DADDR:
+    case BF_MATCHER_IP4_PROTO:
+    case BF_MATCHER_IP6_SADDR:
+    case BF_MATCHER_IP6_DADDR:
+    case BF_MATCHER_ICMP_TYPE:
+    case BF_MATCHER_ICMP_CODE:
+    case BF_MATCHER_ICMPV6_TYPE:
+    case BF_MATCHER_ICMPV6_CODE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /**
  * @brief Generic load + value compare for matchers whose field size and offset
  * are fully described by `_bf_matcher_metas`.
@@ -134,9 +183,22 @@ static int _bf_matcher_pkt_load_and_cmp(struct bf_program *program,
 {
     int r;
 
-    r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
-    if (r)
-        return r;
+    /* Skip the load if the previous rule left the same field in R1 (and
+     * R2 for 16-byte fields). The matcher type alone identifies the field:
+     * it determines the `bf_matcher_meta` entry, i.e. the layer, the
+     * guard's protocol ID, the field offset, and the field size. See the
+     * soundness argument in the pipeline comment at the top of this file. */
+    if (!(program->field_cache.rule_eligible && program->field_cache.valid &&
+          program->field_cache.type == bf_matcher_get_type(matcher))) {
+        r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
+        if (r)
+            return r;
+    }
+
+    if (program->field_cache.rule_eligible) {
+        program->field_cache.valid = true;
+        program->field_cache.type = bf_matcher_get_type(matcher);
+    }
 
     return bf_cmp_value(program, matcher, bf_matcher_payload(matcher),
                         meta->hdr_payload_size, BPF_REG_1);
