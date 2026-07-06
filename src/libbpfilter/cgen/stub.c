@@ -294,10 +294,21 @@ static int _bf_stub_slice_l3(struct bf_program *program, struct bf_jmpctx *skip)
  * - IPv6: the next header value is stored in @c r8 ; if extension headers are
  *   present, the EH parsing ELF stub is called to locate the L4 header.
  *
- * `bf_runtime.l4_offset` is updated on both paths: the L4 slice request and
- * the EH parsing ELF stubs read it. `bf_runtime.l3_size` is only written when
- * the chain logs packets ( @c BF_CHAIN_LOG ): the packet logging ELF stub is
- * its only consumer.
+ * The emitted bytecode depends on the chain's flags, mirroring
+ * @ref bf_stub_parse_l4_hdr :
+ * - Neither @c BF_CHAIN_NEEDS_L4_HDR nor @c BF_CHAIN_NEEDS_L4_PROTO : no
+ *   instruction is emitted, @c r8 keeps its prologue-reset value of 0, and
+ *   `bf_runtime.l4_offset` is left unwritten.
+ * - @c BF_CHAIN_NEEDS_L4_PROTO only: the L4 protocol ID is derived into
+ *   @c r8 , but no L4 slice request follows, so `bf_runtime.l4_offset` is
+ *   dead: the offset computation and its stack store are skipped. The EH
+ *   parsing ELF stubs still write `l4_offset` as their own loop state.
+ * - @c BF_CHAIN_NEEDS_L4_HDR : the full derivation described above is
+ *   emitted, including the `bf_runtime.l4_offset` store read by the L4 slice
+ *   request.
+ *
+ * `bf_runtime.l3_size` is only written when the chain logs packets
+ * ( @c BF_CHAIN_LOG ): the packet logging ELF stub is its only consumer.
  * Callers must ensure this stub is only reached when @c r7 contains a
  * supported L3 protocol ID (IPv4 or IPv6) and @c r6 points to the L3 header.
  *
@@ -315,25 +326,43 @@ static int _bf_stub_slice_l3(struct bf_program *program, struct bf_jmpctx *skip)
  */
 static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
 {
+    uint8_t flags;
+
     assert(program);
+
+    flags = program->runtime.chain->flags;
+
+    /* If no rule reads the L4 header slice nor the normalized L4 protocol ID,
+     * skip the L4 derivation entirely: r8 keeps its prologue-reset value of 0,
+     * and l4_offset is left unwritten. */
+    if (!(flags &
+          (BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) | BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO))))
+        return 0;
 
     {
         // IPv4
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
 
-        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+        if (flags & BF_FLAG(BF_CHAIN_LOG)) {
             EMIT(program,
                  BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
                             sizeof(struct iphdr)));
         }
-        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_6, 0));
-        EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
-        EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
-        if (l3_offset)
-            EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
-        EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
-                                  BF_PROG_CTX_OFF(l4_offset)));
+
+        /* l4_offset is only read by the L4 slice request: when no rule reads
+         * the L4 header slice, skip the IHL-based offset computation and its
+         * stack store. The protocol field sits at a fixed offset, independent
+         * of the IHL. */
+        if (flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR)) {
+            EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_6, 0));
+            EMIT(program, BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x0f));
+            EMIT(program, BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 2));
+            if (l3_offset)
+                EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, l3_offset));
+            EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_1,
+                                      BF_PROG_CTX_OFF(l4_offset)));
+        }
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                   offsetof(struct iphdr, protocol)));
     }
@@ -345,7 +374,7 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
         _clean_bf_jmpctx_ struct bf_jmpctx _ = bf_jmpctx_get(
             program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IPV6), 0));
 
-        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+        if (flags & BF_FLAG(BF_CHAIN_LOG)) {
             EMIT(program,
                  BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
                             sizeof(struct ipv6hdr)));
@@ -388,7 +417,7 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
         // If any rule filters on ipv6.nexthdr, store the EH in the runtime context
         // during process, so we won't have to process the EH again.
-        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR))
+        if (flags & BF_FLAG(BF_CHAIN_STORE_NEXTHDR))
             EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_PARSE_IPV6_NH);
         else
             EMIT_FIXUP_ELFSTUB(program, BF_ELFSTUB_PARSE_IPV6_EH);
@@ -401,9 +430,15 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
         bf_jmpctx_cleanup(&udpjmp);
         bf_jmpctx_cleanup(&noehjmp);
 
-        // Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr)
-        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
-                                 l3_offset + sizeof(struct ipv6hdr)));
+        /* Process IPv6 header, no EH (BPF_REG_8 already contains nexthdr).
+         * l4_offset is only read by the L4 slice request: skip the store when
+         * no rule reads the L4 header slice. The EH parsing ELF stubs write
+         * l4_offset themselves as their own loop state. */
+        if (flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR)) {
+            EMIT(program,
+                 BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l4_offset),
+                            l3_offset + sizeof(struct ipv6hdr)));
+        }
 
         bf_jmpctx_cleanup(&ehjmp);
     }

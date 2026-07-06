@@ -60,6 +60,11 @@ int bf_stub_make_ctx_skb_dynptr(struct bf_program *program, int skb_reg);
  * that path @c r6 is left uninitialized: matchers must be guarded by an L3
  * protocol check on @c r7 before reading it.
  *
+ * The L4 derivation stage is gated on the chain's flags: when the chain sets
+ * neither @c BF_CHAIN_NEEDS_L4_HDR nor @c BF_CHAIN_NEEDS_L4_PROTO , it emits
+ * nothing, @c r8 keeps its prologue-reset value of 0, and
+ * `bf_runtime.l4_offset` is left unwritten.
+ *
  * @param program Program to emit instructions into.
  * @return 0 on success, or negative errno value on error.
  */
@@ -94,6 +99,11 @@ int bf_stub_parse_l3_hdr(struct bf_program *program);
  * L3 protocol ID register is set to 0. On that path @c r6 might be left
  * uninitialized: matchers must be guarded by an L3 protocol check on @c r7
  * before reading it.
+ *
+ * The shared L4 derivation stage is gated on the chain's flags: when the
+ * chain sets neither @c BF_CHAIN_NEEDS_L4_HDR nor @c BF_CHAIN_NEEDS_L4_PROTO ,
+ * it emits nothing, @c r8 keeps its prologue-reset value of 0, and
+ * `bf_runtime.l4_offset` is left unwritten.
  *
  * When the chain consumes the L4 header slice ( @c BF_CHAIN_NEEDS_L4_HDR ),
  * plain IPv4 packets (IHL == 5) on the combined-slice path take an L4 fast

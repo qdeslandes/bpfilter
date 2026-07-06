@@ -153,7 +153,11 @@ struct bf_runtime
     /** Offset of the layer 3 protocol header. */
     __u32 bf_aligned(8) l3_offset;
 
-    /** Offset of the layer 4 protocol header. */
+    /** Offset of the layer 4 protocol header. Only written by the inline L4
+     * derivation stage under `BF_CHAIN_NEEDS_L4_HDR`: the L4 slice request is
+     * its only consumer. The IPv6 extension header parsing ELF stubs also
+     * write it, as their own loop state. New readers must extend the flag
+     * gating in cgen/stub.c. */
     __u32 bf_aligned(8) l4_offset;
 
     /** On ingress, index of the input interface. On egress, index of the
