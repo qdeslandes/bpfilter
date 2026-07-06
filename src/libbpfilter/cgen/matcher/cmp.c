@@ -46,15 +46,6 @@ uint8_t bf_cmp_get_jmp_ins(const struct bf_matcher *matcher)
 
 #define _BF_MASK_LAST_BYTE 15
 
-static inline uint64_t _bf_read_u64(const void *ptr)
-{
-    uint64_t val;
-
-    memcpy(&val, ptr, sizeof(val));
-
-    return val;
-}
-
 /**
  * @brief Compute a network prefix mask.
  *
@@ -116,9 +107,9 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
         case 16: {
             const uint8_t *addr = ref;
             struct bpf_insn ld64_lo[2] = {
-                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr))};
+                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr))};
             struct bpf_insn ld64_hi[2] = {
-                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr + 8))};
+                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr + 8))};
 
             EMIT(program, ld64_lo[0]);
             EMIT(program, ld64_lo[1]);
@@ -181,7 +172,7 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
         /* 64-bit values: load the immediate in R2 with `LD_IMM64` (2
          * instruction slots, 1 executed instruction), then compare with
          * `JMP_REG`. */
-        struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, _bf_read_u64(ref))};
+        struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, bf_read_u64(ref))};
 
         EMIT(program, ld64[0]);
         EMIT(program, ld64[1]);
@@ -195,9 +186,9 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
          * `LD_IMM64`. */
         const uint8_t *addr = ref;
         struct bpf_insn ld64_lo[2] = {
-            BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr))};
+            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr))};
         struct bpf_insn ld64_hi[2] = {
-            BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(addr + 8))};
+            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr + 8))};
 
         EMIT(program, ld64_lo[0]);
         EMIT(program, ld64_lo[1]);
@@ -283,9 +274,9 @@ int bf_cmp_masked_value(struct bf_program *program,
         // Apply mask to loaded reg/reg+1 if not a full /128
         if (mask[_BF_MASK_LAST_BYTE] != (uint8_t)~0) {
             struct bpf_insn mask_lo[2] = {
-                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(mask))};
+                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(mask))};
             struct bpf_insn mask_hi[2] = {
-                BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(mask + 8))};
+                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(mask + 8))};
 
             EMIT(program, mask_lo[0]);
             EMIT(program, mask_lo[1]);
@@ -302,9 +293,9 @@ int bf_cmp_masked_value(struct bf_program *program,
             masked_hi[i] = addr[i + 8] & mask[i + 8];
 
         struct bpf_insn ld64_lo[2] = {
-            BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(masked_lo))};
+            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(masked_lo))};
         struct bpf_insn ld64_hi[2] = {
-            BPF_LD_IMM64(BPF_REG_3, _bf_read_u64(masked_hi))};
+            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(masked_hi))};
 
         EMIT(program, ld64_lo[0]);
         EMIT(program, ld64_lo[1]);

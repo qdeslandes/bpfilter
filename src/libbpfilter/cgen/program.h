@@ -65,7 +65,10 @@
  * invalidate `bf_program.field_cache`. Verdict runs
  * (`bf_program.verdict_run`) additionally rely on member rules emitting
  * nothing but the compare: a member's compare-miss path falls straight
- * through to the next rule.
+ * through to the next rule. Runs holding enough unique reference values
+ * are emitted by `bf_program_generate()` as a single search-tree block
+ * (`bf_packet_gen_verdict_run_tree()`), bypassing the incremental member
+ * state entirely.
  *
  * @warning L3 and L4 protocol IDs **must** be stored in registers, no on the
  * stack, as older verifier aren't able to keep track of scalar values located
@@ -303,7 +306,9 @@ struct bf_program
      * same exit verdict form a run: every rule but the last emits a
      * single compare that jumps to the run's shared `MOV r0` + `EXIT`
      * block on match and falls through to the next rule on mismatch.
-     * Never serialized. */
+     * Runs collected above the unique-value threshold are emitted as a
+     * search tree by `bf_program_generate()` instead and bypass this
+     * incremental member state. Never serialized. */
     struct
     {
         /** A verdict run is open: JMP_VERDICT fixups are pending. */

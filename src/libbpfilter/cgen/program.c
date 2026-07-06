@@ -621,6 +621,82 @@ static int _bf_program_rule_guard_sig(const struct bf_program *program,
 }
 
 /**
+ * @brief Emit a rule's protocol guards, deduplicated across rules.
+ *
+ * Protocol guard stage: consecutive rules with the same guard signature
+ * share a guard group. Only the first rule of the group emits the r7/r8
+ * protocol guards (through `bf_stub_rule_check_protocol()`), and a guard
+ * miss jumps past the whole group: the pending
+ * `BF_FIXUP_TYPE_JMP_GUARD_MISS` fixups resolve when the group closes.
+ * In-group rules are entered only from the previous rule's matcher-miss
+ * paths, all of which are post-guard, so their protocol conditions are
+ * already established. The group is force-closed before the accumulated
+ * guard-miss offset can overflow the jump's 16-bit displacement: the
+ * breaking rule re-emits its guards, and packets on the guard-miss path
+ * fail them again, hopping group to group.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param rule Rule to emit the guards of. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_program_emit_rule_guards(struct bf_program *program,
+                                        const struct bf_rule *rule)
+{
+    uint32_t checked_layers = 0;
+    struct bf_guard_sig sig;
+    int r;
+
+    r = _bf_program_rule_guard_sig(program, rule, &sig);
+    if (r)
+        return r;
+
+    if (program->guard_group.active &&
+        program->guard_group.has_l3 == sig.has_l3 &&
+        program->guard_group.l3_proto == sig.l3_proto &&
+        program->guard_group.has_l4 == sig.has_l4 &&
+        program->guard_group.l4_proto == sig.l4_proto &&
+        program->img.size - program->guard_group.start_insn < SHRT_MAX / 2)
+        return 0;
+
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_GUARD_MISS);
+    if (r)
+        return bf_err_r(r, "failed to generate guard miss fixups");
+
+    program->guard_group.active = true;
+    program->guard_group.has_l3 = sig.has_l3;
+    program->guard_group.l3_proto = sig.l3_proto;
+    program->guard_group.has_l4 = sig.has_l4;
+    program->guard_group.l4_proto = sig.l4_proto;
+    program->guard_group.start_insn = program->img.size;
+
+    bf_list_foreach (&rule->matchers, matcher_node) {
+        struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
+
+        if (bf_matcher_get_type(matcher) == BF_MATCHER_SET) {
+            const struct bf_set *set =
+                bf_chain_get_set_for_matcher(program->runtime.chain, matcher);
+
+            if (!set) {
+                return bf_err_r(-ENOENT, "rule %u references non-existent set",
+                                rule->index);
+            }
+
+            for (size_t i = 0; i < set->n_comps && !r; ++i)
+                r = _bf_program_check_proto(program, set->key[i],
+                                            &checked_layers);
+        } else {
+            r = _bf_program_check_proto(program, bf_matcher_get_type(matcher),
+                                        &checked_layers);
+        }
+
+        if (r)
+            return r;
+    }
+
+    return 0;
+}
+
+/**
  * @brief Check whether a rule may join a field-cache run.
  *
  * A rule may consume and publish the r1/r2 field cache (see the
@@ -630,6 +706,12 @@ static int _bf_program_rule_guard_sig(const struct bf_program *program,
  * helper/kfunc/ELF-stub calls that clobber r1-r5, and CONTINUE falls
  * through to the next rule after a match, with register state diverging
  * from the compare-miss path.
+ *
+ * Tree emission of a run (see `_bf_program_collect_verdict_run()`)
+ * additionally requires the matcher to be non-negated: a negated-EQ
+ * member means "field != value -> verdict" and is not a membership test.
+ * Negated members keep the linear member path, which folds the polarity
+ * per member.
  *
  * @param rule Rule to check. Can't be NULL.
  * @return True if the rule is run-eligible.
@@ -659,12 +741,261 @@ static enum bf_matcher_type _bf_rule_matcher_type(const struct bf_rule *rule)
         bf_list_node_get_data(bf_list_get_head(&rule->matchers)));
 }
 
+/** Minimum number of unique reference values in a collected verdict run for
+ * the run to be emitted as a search tree instead of a linear compare
+ * chain. */
+#define _BF_RUN_TREE_MIN_VALUES 8
+
+/** Worst-case instruction slots emitted per tree value for field sizes up
+ * to 4 bytes: one internal-node compare plus one leaf compare, rounded up
+ * to cover the per-chunk next-rule jump. */
+#define _BF_RUN_TREE_SLOTS_PER_VALUE 3
+
+/** Worst-case instruction slots emitted per tree value for 16-byte fields:
+ * internal nodes and leaves each need two `LD_IMM64` (2 slots apiece) and
+ * two compare/jump instructions, plus the per-chunk next-rule jump. */
+#define _BF_RUN_TREE_SLOTS_PER_VALUE_16 9
+
+/**
+ * @brief Check whether a rule may join the verdict run being collected.
+ *
+ * Same predicate as the incremental verdict-run membership in
+ * `_bf_program_generate_rule()`, plus non-negation: see
+ * `_bf_rule_is_run_eligible()`.
+ *
+ * @param rule Rule to check. Can't be NULL.
+ * @param type Matcher type of the run's first rule.
+ * @param verdict Verdict of the run's first rule.
+ * @return True if the rule may join the run.
+ */
+static bool _bf_rule_joins_run(const struct bf_rule *rule,
+                               enum bf_matcher_type type,
+                               enum bf_verdict verdict)
+{
+    return _bf_rule_is_run_eligible(rule) &&
+           _bf_rule_matcher_type(rule) == type && rule->verdict == verdict &&
+           !bf_matcher_get_negate(
+               bf_list_node_get_data(bf_list_get_head(&rule->matchers)));
+}
+
+/**
+ * @brief Collect a maximal verdict run starting at a rule.
+ *
+ * Starting from the enabled rule at @p start_node, walk the chain forward
+ * collecting consecutive rules eligible for tree emission: run-eligible
+ * (see `_bf_rule_is_run_eligible()`), non-negated, carrying the same
+ * matcher type and the same verdict as the first rule. Disabled rules
+ * inside the window are skipped, mirroring the next-enabled-rule peek of
+ * the incremental machinery.
+ *
+ * Collection stops before the worst-case emitted block size can overflow
+ * the `SHRT_MAX / 2` displacement guard shared with the guard-group and
+ * verdict-run force-close logic: a value costs at most 3 instruction
+ * slots for field sizes up to 4 bytes, 9 slots for 16-byte fields. A
+ * longer run simply continues into a following tree block, which
+ * re-enters through the guard group and the field cache, so the split
+ * costs nothing on the hot path.
+ *
+ * Runs shorter than `_BF_RUN_TREE_MIN_VALUES` are not collected: they
+ * can't reach the unique-value threshold, and the incremental machinery
+ * handles them.
+ *
+ * @param start_node Node of the run's first rule. The rule must be
+ *        enabled. Can't be NULL.
+ * @param matchers On success, array of the collected rules' matchers, in
+ *        chain order, owned by the caller. NULL if no run was collected.
+ *        Can't be NULL.
+ * @param n_matchers On success, number of collected matchers. 0 if no run
+ *        was collected. Can't be NULL.
+ * @param last_node On success, node of the run's last collected rule;
+ *        unchanged if no run was collected. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_program_collect_verdict_run(bf_list_node *start_node,
+                                           const struct bf_matcher ***matchers,
+                                           size_t *n_matchers,
+                                           bf_list_node **last_node)
+{
+    _cleanup_free_ const struct bf_matcher **_matchers = NULL;
+    const struct bf_rule *first = bf_list_node_get_data(start_node);
+    const struct bf_matcher_meta *meta;
+    enum bf_matcher_type type;
+    bf_list_node *last = NULL;
+    size_t count = 0;
+    size_t cap;
+    size_t n;
+
+    assert(start_node);
+    assert(matchers);
+    assert(n_matchers);
+    assert(last_node);
+
+    *matchers = NULL;
+    *n_matchers = 0;
+
+    if (!_bf_rule_is_run_eligible(first))
+        return 0;
+
+    type = _bf_rule_matcher_type(first);
+
+    meta = bf_matcher_get_meta(type);
+    if (!meta)
+        return bf_err_r(-EINVAL, "missing meta for matcher type %d", type);
+
+    cap = (size_t)(SHRT_MAX / 2) / (meta->hdr_payload_size == 16 ?
+                                        _BF_RUN_TREE_SLOTS_PER_VALUE_16 :
+                                        _BF_RUN_TREE_SLOTS_PER_VALUE);
+
+    for (bf_list_node *node = start_node; node && count < cap;
+         node = bf_list_node_next(node)) {
+        const struct bf_rule *rule = bf_list_node_get_data(node);
+
+        if (rule->disabled)
+            continue;
+
+        if (!_bf_rule_joins_run(rule, type, first->verdict))
+            break;
+
+        ++count;
+        last = node;
+    }
+
+    if (count < _BF_RUN_TREE_MIN_VALUES)
+        return 0;
+
+    _matchers = malloc(count * sizeof(*_matchers));
+    if (!_matchers)
+        return -ENOMEM;
+
+    n = 0;
+    for (bf_list_node *node = start_node; n < count;
+         node = bf_list_node_next(node)) {
+        const struct bf_rule *rule = bf_list_node_get_data(node);
+
+        if (rule->disabled)
+            continue;
+
+        _matchers[n++] =
+            bf_list_node_get_data(bf_list_get_head(&rule->matchers));
+    }
+
+    *matchers = TAKE_PTR(_matchers);
+    *n_matchers = count;
+    *last_node = last;
+
+    return 0;
+}
+
+/**
+ * @brief Check whether a run reaches the tree unique-value threshold.
+ *
+ * Counts unique reference payloads, stopping as soon as
+ * `_BF_RUN_TREE_MIN_VALUES` are found. Runs below the threshold stay on
+ * the linear member path: a search tree over a handful of values doesn't
+ * beat the compare chain.
+ *
+ * @param matchers Matchers of the collected run. Can't be NULL.
+ * @param n Number of matchers in @p matchers . Can't be 0.
+ * @return True if the run holds at least `_BF_RUN_TREE_MIN_VALUES` unique
+ *         reference values.
+ */
+static bool _bf_run_reaches_tree_threshold(const struct bf_matcher **matchers,
+                                           size_t n)
+{
+    const struct bf_matcher_meta *meta =
+        bf_matcher_get_meta(bf_matcher_get_type(matchers[0]));
+    const void *uniques[_BF_RUN_TREE_MIN_VALUES];
+    size_t n_unique = 0;
+
+    assert(meta);
+
+    for (size_t i = 0; i < n; ++i) {
+        const void *payload = bf_matcher_payload(matchers[i]);
+        bool dup = false;
+
+        for (size_t j = 0; j < n_unique; ++j) {
+            if (memcmp(payload, uniques[j], meta->hdr_payload_size) == 0) {
+                dup = true;
+                break;
+            }
+        }
+
+        if (dup)
+            continue;
+
+        uniques[n_unique++] = payload;
+        if (n_unique == _BF_RUN_TREE_MIN_VALUES)
+            return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Generate a collected verdict run as a search-tree block.
+ *
+ * Reproduces the stages of `_bf_program_generate_rule()` for the whole
+ * run at once: guard group open/join (one emission covers the block, as
+ * every rule of the run carries the same matcher type, hence the same
+ * signature), field-cache eligibility (every collected rule satisfies the
+ * conditions by construction), tree emission, then the shared verdict
+ * block. The incremental verdict-run member protocol is bypassed; if the
+ * preceding rule joined the run as a member (a negated same-type,
+ * same-verdict rule is eligible for the linear run but not for the tree),
+ * its pending match jumps resolve to the block's shared verdict pair,
+ * which carries the same verdict by construction.
+ *
+ * Fixups resolve in the same order as the closing rule of a linear run:
+ * pending `BF_FIXUP_TYPE_JMP_VERDICT` jumps land on the shared
+ * `MOV r0` + `EXIT` pair, and `BF_FIXUP_TYPE_JMP_NEXT_RULE` jumps land
+ * right after it, on the rule following the block.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param rule First rule of the run. Can't be NULL.
+ * @param matchers Matchers of the run's rules. Can't be NULL.
+ * @param n Number of matchers in @p matchers . Can't be 0.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int _bf_program_generate_verdict_run_tree(
+    struct bf_program *program, const struct bf_rule *rule,
+    const struct bf_matcher **matchers, size_t n)
+{
+    int ret_code;
+    int r;
+
+    r = _bf_program_emit_rule_guards(program, rule);
+    if (r)
+        return r;
+
+    program->field_cache.rule_eligible = true;
+
+    r = bf_packet_gen_verdict_run_tree(program, matchers, n);
+    if (r)
+        return r;
+
+    r = program->runtime.ops->get_verdict(rule->verdict, &ret_code);
+    if (r)
+        return r;
+
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_VERDICT);
+    if (r)
+        return bf_err_r(r, "failed to generate verdict fixups");
+    program->verdict_run.active = false;
+
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_0, ret_code));
+    EMIT(program, BPF_EXIT_INSN());
+
+    r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_NEXT_RULE);
+    if (r)
+        return bf_err_r(r, "failed to generate next rule fixups");
+
+    return 0;
+}
+
 static int _bf_program_generate_rule(struct bf_program *program,
                                      struct bf_rule *rule,
                                      const struct bf_rule *next)
 {
-    uint32_t checked_layers = 0;
-    struct bf_guard_sig sig;
     bool run_member;
     int ret_code;
     int r = 0;
@@ -710,65 +1041,11 @@ static int _bf_program_generate_rule(struct bf_program *program,
         }
     }
 
-    /* Protocol guard stage: consecutive rules with the same guard
-     * signature share a guard group. Only the first rule of the group
-     * emits the r7/r8 protocol guards (through
-     * `bf_stub_rule_check_protocol()`), and a guard miss jumps past the
-     * whole group: the pending `BF_FIXUP_TYPE_JMP_GUARD_MISS` fixups
-     * resolve when the group closes. In-group rules are entered only from
-     * the previous rule's matcher-miss paths, all of which are post-guard,
-     * so their protocol conditions are already established. The group is
-     * force-closed before the accumulated guard-miss offset can overflow
-     * the jump's 16-bit displacement: the breaking rule re-emits its
-     * guards, and packets on the guard-miss path fail them again, hopping
-     * group to group. */
-    r = _bf_program_rule_guard_sig(program, rule, &sig);
+    /* Protocol guard stage: open or join the rule's guard group, see
+     * `_bf_program_emit_rule_guards()`. */
+    r = _bf_program_emit_rule_guards(program, rule);
     if (r)
         return r;
-
-    if (!(program->guard_group.active &&
-          program->guard_group.has_l3 == sig.has_l3 &&
-          program->guard_group.l3_proto == sig.l3_proto &&
-          program->guard_group.has_l4 == sig.has_l4 &&
-          program->guard_group.l4_proto == sig.l4_proto &&
-          program->img.size - program->guard_group.start_insn < SHRT_MAX / 2)) {
-        r = _bf_program_fixup(program, BF_FIXUP_TYPE_JMP_GUARD_MISS);
-        if (r)
-            return bf_err_r(r, "failed to generate guard miss fixups");
-
-        program->guard_group.active = true;
-        program->guard_group.has_l3 = sig.has_l3;
-        program->guard_group.l3_proto = sig.l3_proto;
-        program->guard_group.has_l4 = sig.has_l4;
-        program->guard_group.l4_proto = sig.l4_proto;
-        program->guard_group.start_insn = program->img.size;
-
-        bf_list_foreach (&rule->matchers, matcher_node) {
-            struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
-
-            if (bf_matcher_get_type(matcher) == BF_MATCHER_SET) {
-                const struct bf_set *set = bf_chain_get_set_for_matcher(
-                    program->runtime.chain, matcher);
-
-                if (!set) {
-                    return bf_err_r(-ENOENT,
-                                    "rule %u references non-existent set",
-                                    rule->index);
-                }
-
-                for (size_t i = 0; i < set->n_comps && !r; ++i) {
-                    r = _bf_program_check_proto(program, set->key[i],
-                                                &checked_layers);
-                }
-            } else {
-                r = _bf_program_check_proto(
-                    program, bf_matcher_get_type(matcher), &checked_layers);
-            }
-
-            if (r)
-                return r;
-        }
-    }
 
     bf_list_foreach (&rule->matchers, matcher_node) {
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
@@ -1112,9 +1389,39 @@ int bf_program_generate(struct bf_program *program)
                                   BF_PROG_CTX_OFF(state_map)));
     }
 
-    bf_list_foreach (&chain->rules, rule_node) {
+    for (bf_list_node *rule_node = bf_list_get_head(&chain->rules); rule_node;
+         rule_node = bf_list_node_next(rule_node)) {
+        struct bf_rule *rule = bf_list_node_get_data(rule_node);
         bf_list_node *next_node = bf_list_node_next(rule_node);
         const struct bf_rule *next = NULL;
+
+        /* Tree stage: collect a maximal verdict run; if it holds enough
+         * unique reference values, emit it as a single search-tree block
+         * and resume the walk past the consumed rules. Shorter or
+         * repetitive runs fall through to `_bf_program_generate_rule()`,
+         * whose incremental verdict-run machinery handles them.
+         * cgroup_sock_addr chains keep the linear path: the tree emitter
+         * relies on the packet-flavor field loads. */
+        if (!rule->disabled && program->flavor != BF_FLAVOR_CGROUP_SOCK_ADDR) {
+            _cleanup_free_ const struct bf_matcher **matchers = NULL;
+            bf_list_node *last_node = NULL;
+            size_t n = 0;
+
+            r = _bf_program_collect_verdict_run(rule_node, &matchers, &n,
+                                                &last_node);
+            if (r)
+                return r;
+
+            if (n && _bf_run_reaches_tree_threshold(matchers, n)) {
+                r = _bf_program_generate_verdict_run_tree(program, rule,
+                                                          matchers, n);
+                if (r)
+                    return r;
+
+                rule_node = last_node;
+                continue;
+            }
+        }
 
         /* Peek at the next enabled rule, skipping disabled ones: the
          * verdict-run logic groups a rule with the rule that actually
@@ -1127,8 +1434,7 @@ int bf_program_generate(struct bf_program *program)
             next_node = bf_list_node_next(next_node);
         }
 
-        r = _bf_program_generate_rule(program, bf_list_node_get_data(rule_node),
-                                      next);
+        r = _bf_program_generate_rule(program, rule, next);
         if (r)
             return r;
     }

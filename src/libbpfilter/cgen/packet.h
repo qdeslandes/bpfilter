@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 struct bf_matcher;
 struct bf_program;
@@ -45,6 +46,31 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher);
  */
 int bf_packet_gen_inline_matcher(struct bf_program *program,
                                  const struct bf_matcher *matcher);
+
+/**
+ * @brief Emit a verdict run as a balanced binary search tree.
+ *
+ * Alternative to the incremental verdict-run member protocol for long
+ * runs: the run's field is loaded once into `r1` (and `r2` for 128-bit
+ * fields), honoring and publishing `bf_program.field_cache`, then
+ * compared against the run's sorted, deduplicated reference values with
+ * O(log n) executed branches. Every match jumps to the block's shared
+ * verdict pair through a `BF_FIXUP_TYPE_JMP_VERDICT` fixup; every miss
+ * reaches a `BF_FIXUP_TYPE_JMP_NEXT_RULE` jump. The caller owns both
+ * fixup resolutions and the shared `MOV r0` + `EXIT` pair.
+ *
+ * Every matcher must be a non-negated, cacheable `BF_MATCHER_EQ` matcher
+ * of the same type (see `_bf_program_collect_verdict_run()` in
+ * program.c). The caller must set `bf_program.field_cache.rule_eligible`.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param matchers Matchers of the run's rules. Can't be NULL.
+ * @param n Number of matchers in @p matchers . Can't be 0.
+ * @return 0 on success, negative errno on error.
+ */
+int bf_packet_gen_verdict_run_tree(struct bf_program *program,
+                                   const struct bf_matcher **matchers,
+                                   size_t n);
 
 /**
  * @brief Generate bytecode for packet-based rule logging.

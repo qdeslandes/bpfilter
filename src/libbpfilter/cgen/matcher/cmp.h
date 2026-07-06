@@ -6,9 +6,29 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 struct bf_matcher;
 struct bf_program;
+
+/**
+ * @brief Read 8 bytes from an unaligned buffer as a host-endian `uint64_t`.
+ *
+ * Matches the representation a `BPF_DW` load leaves in a register on the
+ * same host, so codegen-time values built from reference payloads compare
+ * consistently with runtime-loaded packet fields.
+ *
+ * @param ptr Buffer to read from. Can't be NULL.
+ * @return The buffer's first 8 bytes, as a `uint64_t`.
+ */
+static inline uint64_t bf_read_u64(const void *ptr)
+{
+    uint64_t val;
+
+    memcpy(&val, ptr, sizeof(val));
+
+    return val;
+}
 
 /**
  * @brief Get the BPF jump opcode for a matcher, accounting for negation.

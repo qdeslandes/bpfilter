@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <bpfilter/chain.h>
 #include <bpfilter/elfstub.h>
@@ -22,6 +23,7 @@
 #include <bpfilter/rule.h>
 #include <bpfilter/set.h>
 
+#include "cgen/jmp.h"
 #include "cgen/matcher/cmp.h"
 #include "cgen/matcher/meta.h"
 #include "cgen/matcher/set.h"
@@ -31,7 +33,7 @@
 #include "filter.h"
 
 /**
- * Packet matcher codegen follows a three-stage pipeline:
+ * Packet matcher codegen follows a four-stage pipeline:
  *
  * 1. Protocol check: `_bf_program_generate_rule()` (in program.c)
  *    emits deduplicated protocol guards before the matcher loop,
@@ -94,6 +96,25 @@
  * the run's shared verdict block, i.e. the closing rule's `MOV r0` +
  * `EXIT` pair, where all the run's matches converge. Members skip their
  * private verdict pair entirely.
+ *
+ * 4. Tree runs: verdict runs holding enough unique reference values are
+ *    emitted by `bf_program_generate()` (in program.c) as a single
+ *    search-tree block instead of the member protocol.
+ *    `bf_packet_gen_verdict_run_tree()` loads the field once — honoring
+ *    and publishing the field cache exactly like stage 2 — then walks a
+ *    balanced binary search tree over the run's sorted, deduplicated
+ *    reference values: internal nodes bisect the range with an unsigned
+ *    strict-greater compare, leaves test equality and jump to the
+ *    block's shared verdict pair. Comparing in sorted order is sound
+ *    because the codegen-time keys and the emitted immediates are read
+ *    from the reference payloads exactly as the runtime loads read the
+ *    packet field, by the same host: the ordering is consistent even
+ *    though the bytes are network-ordered, and equality is
+ *    byte-order-agnostic. No tree instruction mutates `r1`/`r2` (`r3` is
+ *    the only scratch), so the cache soundness argument of stage 2
+ *    carries over both into and out of the block. Every leaf chunk's
+ *    miss converges on the block's next-rule jump, landing on the rule
+ *    following the block.
  */
 
 #define BF_IPV6_EH_HOPOPTS(x) ((x) << 0)
@@ -227,6 +248,274 @@ static int _bf_matcher_pkt_load_and_cmp(struct bf_program *program,
 
     return bf_cmp_value(program, matcher, bf_matcher_payload(matcher),
                         meta->hdr_payload_size, BPF_REG_1);
+}
+
+/** Maximum number of values compared linearly in a tree leaf chunk. */
+#define _BF_TREE_LEAF_MAX 4
+
+/**
+ * @brief Reference value of a tree-run member, in comparison order.
+ *
+ * Keys mirror the runtime representation of the packet field: comparing
+ * them at codegen time and comparing the emitted immediates at runtime
+ * yield the same order, since both are computed by the same host from the
+ * same bytes.
+ */
+struct bf_tree_key
+{
+    /** Reference value for sizes up to 4 bytes (zero-extended), or the low
+     * 8 bytes of a 16-byte value, as `_bf_matcher_pkt_load_field()` loads
+     * them into `r1`. */
+    uint64_t k0;
+
+    /** High 8 bytes of a 16-byte value, as `_bf_matcher_pkt_load_field()`
+     * loads them into `r2`. Zero for smaller sizes. */
+    uint64_t k1;
+};
+
+static int _bf_tree_key_cmp(const void *lhs, const void *rhs)
+{
+    const struct bf_tree_key *lkey = lhs;
+    const struct bf_tree_key *rkey = rhs;
+
+    if (lkey->k0 != rkey->k0)
+        return lkey->k0 < rkey->k0 ? -1 : 1;
+    if (lkey->k1 != rkey->k1)
+        return lkey->k1 < rkey->k1 ? -1 : 1;
+
+    return 0;
+}
+
+/**
+ * @brief Emit a tree leaf chunk: linear equality tests over a short range.
+ *
+ * Each value emits the same compare shape as the verdict-run member path
+ * in `bf_cmp_value()`: a match jumps to the block's shared verdict pair
+ * (pending `BF_FIXUP_TYPE_JMP_VERDICT` fixup), a miss falls through to
+ * the next value. The chunk closes with an unconditional
+ * `BF_FIXUP_TYPE_JMP_NEXT_RULE` jump: a miss must jump over the shared
+ * verdict block, never fall into it.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param keys Sorted, deduplicated reference values. Can't be NULL.
+ * @param low First index of the chunk.
+ * @param high Last index of the chunk (inclusive).
+ * @param size Field size in bytes: 1, 2, 4, or 16.
+ * @return 0 on success, negative errno on error.
+ */
+static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
+                                    const struct bf_tree_key *keys, size_t low,
+                                    size_t high, unsigned int size)
+{
+    for (size_t i = low; i <= high; ++i) {
+        switch (size) {
+        case 1:
+        case 2:
+            EMIT_FIXUP_JMP_VERDICT(
+                program,
+                BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, (uint32_t)keys[i].k0, 0));
+            break;
+        case 4:
+            EMIT_FIXUP_JMP_VERDICT(
+                program,
+                BPF_JMP32_IMM(BPF_JEQ, BPF_REG_1, (uint32_t)keys[i].k0, 0));
+            break;
+        case 16: {
+            struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, keys[i].k0)};
+            struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, keys[i].k1)};
+
+            EMIT(program, ld64_lo[0]);
+            EMIT(program, ld64_lo[1]);
+
+            {
+                /* Low half mismatch: skip the high half check and fall
+                 * through to the next value's compare. */
+                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_get(
+                    program, BPF_JMP_REG(BPF_JNE, BPF_REG_1, BPF_REG_3, 0));
+
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                EMIT_FIXUP_JMP_VERDICT(
+                    program, BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_3, 0));
+            }
+            break;
+        }
+        default:
+            return bf_err_r(-EINVAL, "unsupported tree comparison size %u",
+                            size);
+        }
+    }
+
+    EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_A(0));
+
+    return 0;
+}
+
+/**
+ * @brief Recursively emit a search tree over a sorted key range.
+ *
+ * Ranges of at most `_BF_TREE_LEAF_MAX` values emit a leaf chunk; larger
+ * ranges emit an internal node: an unsigned strict-greater compare
+ * against the pivot (the middle key) jumping to the right subtree, so the
+ * left subtree keeps pivot equality.
+ *
+ * For 16-byte fields, internal nodes pivot on `k0` only: the pivot index
+ * is first extended to the last entry sharing its `k0`, so every entry
+ * equal on `k0` stays in the left subtree and the strict-greater test
+ * remains a correct partition. When the pivot's `k0` group reaches the
+ * end of the range, the split moves below the group instead; when the
+ * whole range shares one `k0`, the node pivots on `k1`, which is unique
+ * after deduplication. A packet whose low half differs from the shared
+ * `k0` may then take either branch: it fails every leaf equality test
+ * anyway.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param keys Sorted, deduplicated reference values. Can't be NULL.
+ * @param low First index of the range.
+ * @param high Last index of the range (inclusive).
+ * @param size Field size in bytes: 1, 2, 4, or 16.
+ * @return 0 on success, negative errno on error.
+ */
+static int _bf_tree_emit_range(struct bf_program *program,
+                               const struct bf_tree_key *keys, size_t low,
+                               size_t high, unsigned int size)
+{
+    size_t mid = low + ((high - low) / 2);
+    bool pivot_on_k1 = false;
+    int r;
+
+    if (high - low + 1 <= _BF_TREE_LEAF_MAX)
+        return _bf_tree_emit_leaf_chunk(program, keys, low, high, size);
+
+    if (size == 16) {
+        while (mid < high && keys[mid + 1].k0 == keys[mid].k0)
+            ++mid;
+
+        if (mid == high) {
+            mid = low + ((high - low) / 2);
+            while (mid > low && keys[mid - 1].k0 == keys[mid].k0)
+                --mid;
+
+            if (mid == low) {
+                pivot_on_k1 = true;
+                mid = low + ((high - low) / 2);
+            } else {
+                --mid;
+            }
+        }
+    }
+
+    {
+        _clean_bf_jmpctx_ struct bf_jmpctx right = bf_jmpctx_default();
+
+        if (size == 16) {
+            struct bpf_insn ld64[2] = {BPF_LD_IMM64(
+                BPF_REG_3, pivot_on_k1 ? keys[mid].k1 : keys[mid].k0)};
+
+            EMIT(program, ld64[0]);
+            EMIT(program, ld64[1]);
+            right = bf_jmpctx_get(
+                program,
+                BPF_JMP_REG(BPF_JGT, pivot_on_k1 ? BPF_REG_2 : BPF_REG_1,
+                            BPF_REG_3, 0));
+        } else {
+            right = bf_jmpctx_get(
+                program,
+                BPF_JMP32_IMM(BPF_JGT, BPF_REG_1, (uint32_t)keys[mid].k0, 0));
+        }
+
+        r = _bf_tree_emit_range(program, keys, low, mid, size);
+        if (r)
+            return r;
+
+        /* The jump closes here: a strict-greater packet lands on the
+         * right subtree, emitted below. The left subtree never falls
+         * through: its leaf chunks all end with a next-rule jump. */
+    }
+
+    return _bf_tree_emit_range(program, keys, mid + 1, high, size);
+}
+
+int bf_packet_gen_verdict_run_tree(struct bf_program *program,
+                                   const struct bf_matcher **matchers, size_t n)
+{
+    _cleanup_free_ struct bf_tree_key *keys = NULL;
+    const struct bf_matcher_meta *meta;
+    enum bf_matcher_type type;
+    unsigned int size;
+    size_t n_unique;
+    int r;
+
+    assert(program);
+    assert(matchers);
+    assert(n > 0);
+
+    type = bf_matcher_get_type(matchers[0]);
+    meta = bf_matcher_get_meta(type);
+    if (!meta)
+        return bf_err_r(-EINVAL, "missing meta for matcher type %d", type);
+
+    size = meta->hdr_payload_size;
+
+    /* Read each reference payload exactly as `bf_cmp_value()` and the
+     * runtime field loads do, so codegen-time ordering matches the
+     * emitted compares on any host endianness. */
+    keys = calloc(n, sizeof(*keys));
+    if (!keys)
+        return -ENOMEM;
+
+    for (size_t i = 0; i < n; ++i) {
+        const void *ref = bf_matcher_payload(matchers[i]);
+
+        switch (size) {
+        case 1:
+            keys[i].k0 = *(const uint8_t *)ref;
+            break;
+        case 2:
+            keys[i].k0 = *(const uint16_t *)ref;
+            break;
+        case 4:
+            keys[i].k0 = *(const uint32_t *)ref;
+            break;
+        case 16:
+            keys[i].k0 = bf_read_u64(ref);
+            keys[i].k1 = bf_read_u64((const uint8_t *)ref + 8);
+            break;
+        default:
+            return bf_err_r(-EINVAL, "unsupported tree comparison size %u",
+                            size);
+        }
+    }
+
+    qsort(keys, n, sizeof(*keys), _bf_tree_key_cmp);
+
+    /* Duplicate values within a run share the verdict: later occurrences
+     * are dead code on the linear path, so dropping them is safe. */
+    n_unique = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (n_unique && keys[i].k0 == keys[n_unique - 1].k0 &&
+            keys[i].k1 == keys[n_unique - 1].k1)
+            continue;
+        keys[n_unique++] = keys[i];
+    }
+
+    /* Same cache-aware load as `_bf_matcher_pkt_load_and_cmp()`: the
+     * block sits in one guard group with its same-type neighbors, and no
+     * tree instruction mutates r1/r2, so the cache is sound both into
+     * and out of the block. */
+    if (!(program->field_cache.rule_eligible && program->field_cache.valid &&
+          program->field_cache.type == type)) {
+        r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
+        if (r)
+            return r;
+    }
+
+    if (program->field_cache.rule_eligible) {
+        program->field_cache.valid = true;
+        program->field_cache.type = type;
+    }
+
+    return _bf_tree_emit_range(program, keys, 0, n_unique - 1, size);
 }
 
 static int _bf_matcher_pkt_generate_net(struct bf_program *program,
