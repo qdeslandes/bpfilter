@@ -56,6 +56,12 @@ static int _bf_tc_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
+    /* No rule consumes packet-header state: skip the parsing pipeline
+     * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
+     * stay unwritten as no matcher can read them. */
+    if (!bf_chain_needs_pkt_parse(program->runtime.chain))
+        return 0;
+
     r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)
         return r;

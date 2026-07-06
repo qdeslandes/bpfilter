@@ -205,12 +205,16 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
         }
 
         /* Track which prologue features the matchers rely on: IPv6 nexthdr
-         * storage, the L4 header slice, and the normalized L4 protocol ID. */
+         * storage, the L3 header and protocol ID, the L4 header slice, and
+         * the normalized L4 protocol ID. */
         if (!rule->disabled) {
             switch (bf_matcher_get_type(matcher)) {
             case BF_MATCHER_IP6_NEXTHDR:
                 chain->flags |= BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
                                 BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
+                break;
+            case BF_MATCHER_META_L3_PROTO:
+                chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L3);
                 break;
             case BF_MATCHER_META_L4_PROTO:
                 chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
@@ -225,6 +229,9 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                                 BF_FLAG(BF_CHAIN_FLOW_HASH);
                 break;
             default:
+                if (meta->layer == BF_MATCHER_LAYER_2 ||
+                    meta->layer == BF_MATCHER_LAYER_3)
+                    chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L3);
                 if (meta->layer == BF_MATCHER_LAYER_4)
                     chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
                 break;
@@ -264,8 +271,13 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                                     bf_hook_to_str(chain->hook));
                 }
 
-                if (comp_meta->layer == BF_MATCHER_LAYER_4 && !rule->disabled)
-                    chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                if (!rule->disabled) {
+                    if (comp_meta->layer == BF_MATCHER_LAYER_2 ||
+                        comp_meta->layer == BF_MATCHER_LAYER_3)
+                        chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L3);
+                    if (comp_meta->layer == BF_MATCHER_LAYER_4)
+                        chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
+                }
             }
         }
     }

@@ -44,10 +44,13 @@ static inline bool _bf_nf_hook_is_ingress(enum bf_hook hook)
 
 static int _bf_nf_gen_inline_prologue(struct bf_program *program)
 {
+    bool needs_parse;
     int r;
     int offset;
 
     assert(program);
+
+    needs_parse = bf_chain_needs_pkt_parse(program->runtime.chain);
 
     // Copy the ifindex from to bpf_nf_ctx.state.{in,out}.ifindex the runtime context
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "state")) < 0)
@@ -69,30 +72,36 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(ifindex)));
 
-    /* BPF_PROG_TYPE_CGROUP_SKB doesn't provide access the the Ethernet header,
-     * so we can't parse it and discover the L3 protocol ID.
-     * Instead, we use the __sk_buff.family value and convert it to the
-     * corresponding ethertype. */
-    if ((offset = bf_btf_get_field_off("nf_hook_state", "pf")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_3, BPF_REG_2, offset));
+    /* The L3 protocol derivation reads the address family from r2 (the
+     * nf_hook_state pointer loaded above), so it must be emitted before the
+     * packet size calculation below clobbers r1 and r2. */
+    if (needs_parse) {
+        /* The BPF Netfilter programs don't provide access to the Ethernet
+         * header, so we can't parse it and discover the L3 protocol ID.
+         * Instead, we use the nf_hook_state.pf value and convert it to the
+         * corresponding ethertype. */
+        if ((offset = bf_btf_get_field_off("nf_hook_state", "pf")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_3, BPF_REG_2, offset));
 
-    {
-        _clean_bf_swich_ struct bf_swich swich =
-            bf_swich_get(program, BPF_REG_3);
+        {
+            _clean_bf_swich_ struct bf_swich swich =
+                bf_swich_get(program, BPF_REG_3);
 
-        EMIT_SWICH_OPTION(&swich, AF_INET,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
-        EMIT_SWICH_OPTION(&swich, AF_INET6,
-                          BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
-        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
+            EMIT_SWICH_OPTION(&swich, AF_INET,
+                              BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IP)));
+            EMIT_SWICH_OPTION(&swich, AF_INET6,
+                              BPF_MOV64_IMM(BPF_REG_7, htons(ETH_P_IPV6)));
+            EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_7, 0));
 
-        r = bf_swich_generate(&swich);
-        if (r)
-            return r;
+            r = bf_swich_generate(&swich);
+            if (r)
+                return r;
+        }
+
+        EMIT(program,
+             BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
     }
-
-    EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
 
     // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
@@ -104,6 +113,12 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, ETH_HLEN));
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(pkt_size)));
+
+    /* No rule consumes packet-header state: skip the parsing pipeline
+     * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
+     * stay unwritten as no matcher can read them. */
+    if (!needs_parse)
+        return 0;
 
     r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)

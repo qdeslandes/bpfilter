@@ -5,9 +5,12 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include <bpfilter/core/list.h>
 #include <bpfilter/counter.h>
 #include <bpfilter/dump.h>
+#include <bpfilter/helper.h>
 #include <bpfilter/hook.h>
 #include <bpfilter/pack.h>
 #include <bpfilter/verdict.h>
@@ -36,6 +39,11 @@ struct bf_set;
  * Grouping the list of required features at the chain level prevents us from
  * parsing all the rules and matchers everytime the feature would affect the
  * bytecode.
+ *
+ * The packet-header parsing pipeline as a whole (dynptr creation, header
+ * slice requests, L3/L4 protocol derivation) is gated on
+ * @ref bf_chain_needs_pkt_parse : new matchers reading r6, r7, r8, r9, or
+ * the dynptr must set an appropriate flag.
  */
 enum bf_chain_flags
 {
@@ -47,6 +55,10 @@ enum bf_chain_flags
 
     /** A rule will filter on IPv6 nexthdr field. */
     BF_CHAIN_STORE_NEXTHDR,
+
+    /** A rule reads the L3 header (pinned in r6) or the L3 protocol ID
+     * (r7). */
+    BF_CHAIN_NEEDS_L3,
 
     /** A rule reads the L4 header slice: the slice is requested and its
      * address is pinned in r9. The `l4_hdr` and `l4_size` runtime context
@@ -79,6 +91,24 @@ struct bf_chain
     /// Error counters. Not serialized.
     struct bf_counter error_counters;
 };
+
+/**
+ * @brief Check if the chain requires the packet-header parsing pipeline.
+ *
+ * The flavor prologues only emit the parsing pipeline (dynptr creation,
+ * header slice requests, L3/L4 protocol derivation) if a rule consumes one
+ * of its outputs: any of these flags implies the pipeline must run.
+ *
+ * @param chain Chain to check. Can't be NULL.
+ * @return True if the chain consumes packet-header parsing state.
+ */
+static inline bool bf_chain_needs_pkt_parse(const struct bf_chain *chain)
+{
+    return chain->flags &
+           (BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
+            BF_FLAG(BF_CHAIN_NEEDS_L3) | BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
+            BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO) | BF_FLAG(BF_CHAIN_FLOW_HASH));
+}
 
 /**
  * Allocate and initialize a `bf_chain` object.

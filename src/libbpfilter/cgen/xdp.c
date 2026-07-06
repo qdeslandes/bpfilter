@@ -25,8 +25,13 @@
 /**
  * Generate XDP program prologue.
  *
- * @warning @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr
- * for flow-hash chains) will check for the L3 protocol: if it is neither IPv4
+ * The packet-header parsing pipeline is only emitted if the chain consumes
+ * its outputs (see @ref bf_chain_needs_pkt_parse ): otherwise the prologue
+ * reduces to the `ifindex` and `pkt_size` stores.
+ *
+ * @warning When the parsing pipeline is emitted,
+ * @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr for
+ * flow-hash chains) will check for the L3 protocol: if it is neither IPv4
  * nor IPv6, every L3 and L4 matcher is skipped.
  *
  * @param program Program to generate the prologue for. Must not be NULL.
@@ -60,6 +65,12 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_4, BPF_REG_2));
     EMIT(program,
          BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(pkt_size)));
+
+    /* No rule consumes packet-header state: skip the parsing pipeline
+     * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
+     * stay unwritten as no matcher can read them. */
+    if (!bf_chain_needs_pkt_parse(program->runtime.chain))
+        return 0;
 
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_FLOW_HASH)) {
         /* The flow-hash ELF stub dereferences bf_runtime.l3_hdr and

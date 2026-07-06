@@ -57,6 +57,12 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     EMIT(program,
          BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(ifindex)));
 
+    /* No rule consumes packet-header state: skip the L3 protocol derivation
+     * and the parsing pipeline entirely. r7 and r8 keep their prologue-reset
+     * value of 0, r6 and r9 stay unwritten as no matcher can read them. */
+    if (!bf_chain_needs_pkt_parse(program->runtime.chain))
+        return 0;
+
     /* BPF_PROG_TYPE_CGROUP_SKB doesn't provide access the the Ethernet header,
      * so we can't parse it and discover the L3 protocol ID.
      * Instead, we use the __sk_buff.family value and convert it to the

@@ -150,7 +150,8 @@ struct bf_runtime
     __u8 l3_size;
     __u8 l4_size;
 
-    /** Offset of the layer 3 protocol header. */
+    /** Offset of the layer 3 protocol header. Only written when the chain
+     * consumes packet-header state (`bf_chain_needs_pkt_parse()`). */
     __u32 bf_aligned(8) l3_offset;
 
     /** Offset of the layer 4 protocol header. Only written by the inline L4
@@ -169,7 +170,9 @@ struct bf_runtime
      * consumer. New readers must extend the flag gating in cgen/stub.c. */
     void *l2_hdr;
 
-    /** Pointer to the L3 protocol header (in a dynamic pointer slice). */
+    /** Pointer to the L3 protocol header (in a dynamic pointer slice). Only
+     * written when the chain consumes packet-header state
+     * (`bf_chain_needs_pkt_parse()`). */
     void *l3_hdr;
 
     /** Pointer to the L4 protocol header (in a dynamic pointer slice). Only
