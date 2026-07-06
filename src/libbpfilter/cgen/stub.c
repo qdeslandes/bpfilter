@@ -89,6 +89,11 @@ static int _bf_stub_make_ctx_dynptr(struct bf_program *program, int arg_reg,
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0));
 
+        // The update counters ELF stub reads ctx->pkt_size
+        r = program->runtime.ops->gen_inline_store_pkt_size(program);
+        if (r)
+            return r;
+
         // Update the error counter
         EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
@@ -174,6 +179,11 @@ static int _bf_stub_parse_l2_ethhdr(struct bf_program *program)
     {
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
+
+        // The update counters ELF stub reads ctx->pkt_size
+        r = program->runtime.ops->gen_inline_store_pkt_size(program);
+        if (r)
+            return r;
 
         // Update the error counter
         EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
@@ -270,6 +280,11 @@ static int _bf_stub_slice_l3(struct bf_program *program, struct bf_jmpctx *skip)
     {
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
+
+        // The update counters ELF stub reads ctx->pkt_size
+        r = program->runtime.ops->gen_inline_store_pkt_size(program);
+        if (r)
+            return r;
 
         EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
@@ -707,11 +722,6 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
     EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_2,
                               offsetof(struct ethhdr, h_proto)));
 
-    // Set bf_runtime.l3_offset, read by the L3 slice request and the EH
-    // parsing ELF stubs on the slow paths
-    EMIT(program,
-         BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), ETH_HLEN));
-
     /* Pin the L3 header address in r6 for the program's lifetime: matchers
      * load at generation-time-constant offsets covered by the bounds check
      * above, so a packet pointer behaves exactly like a slice pointer. */
@@ -1007,13 +1017,20 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
     if (needs_l4) {
         /* Slow entry for the fast-path escapes (IPv4 options, IPv6 extension
          * headers, IPv6 packets too short for the direct L4 window): r7
-         * already holds a supported ethertype and l3_offset is stored, only
-         * the dynptr is missing. The short path above jumps over this second
-         * dynptr creation, having already gone through the first one. */
+         * already holds a supported ethertype, this block stores l3_offset
+         * and creates the missing dynptr. The short path above jumps over
+         * both, having gone through _bf_stub_parse_l2_ethhdr() (which stores
+         * l3_offset itself) and the first dynptr creation. */
         tailjmp = bf_jmpctx_get(program, BPF_JMP_A(0));
 
         for (size_t i = 0; i < n_slow; ++i)
             bf_jmpctx_cleanup(&slowjmps[i]);
+
+        /* Set bf_runtime.l3_offset, read by the L3 slice request and the EH
+         * parsing ELF stubs on the slow paths. The fast path never reads it,
+         * so the store is deferred to this block. */
+        EMIT(program, BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset),
+                                 ETH_HLEN));
 
         EMIT(program,
              BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
@@ -1118,6 +1135,11 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
     {
         _clean_bf_jmpctx_ struct bf_jmpctx _ =
             bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 0));
+
+        // The update counters ELF stub reads ctx->pkt_size
+        r = program->runtime.ops->gen_inline_store_pkt_size(program);
+        if (r)
+            return r;
 
         EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));

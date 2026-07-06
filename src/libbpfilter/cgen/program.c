@@ -1072,6 +1072,17 @@ static int _bf_program_generate_rule(struct bf_program *program,
         }
     }
 
+    /* The packet logging and update counters ELF stubs both read
+     * ctx->pkt_size: derive and store it here, on the only per-rule paths
+     * reaching those stubs. Rules carrying log or counters are excluded from
+     * verdict runs and field-cache eligibility, so the op's r1-r3 clobbering
+     * can't invalidate a published field cache. */
+    if (rule->log || rule->has_counters) {
+        r = program->runtime.ops->gen_inline_store_pkt_size(program);
+        if (r)
+            return r;
+    }
+
     if (rule->log && rule->log_rate_ns) {
         /* Rate-limited log: check last_log_ts in the state map before
          * logging. Only r0 to r3 are used: bpf_ktime_get_ns() is called
@@ -1453,6 +1464,10 @@ int bf_program_generate(struct bf_program *program)
 
     // Call the update counters function
     /// @todo Allow chains to have no counters at all.
+    r = program->runtime.ops->gen_inline_store_pkt_size(program);
+    if (r)
+        return r;
+
     EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_10));
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
     EMIT_LOAD_COUNTERS_FD_FIXUP(program, BPF_REG_2);

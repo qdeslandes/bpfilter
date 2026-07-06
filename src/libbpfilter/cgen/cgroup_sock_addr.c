@@ -47,9 +47,6 @@ static int _bf_cgroup_sock_addr_gen_inline_prologue(struct bf_program *program)
      * `R6` changes per header, the socket context is fixed so we set it once. */
     EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_1));
 
-    // The counters stub reads `pkt_size` unconditionally; zero it out.
-    EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
-
     /* Convert `bpf_sock_addr.family` to L3 protocol ID in `R7`, using the same
      * `bf_swich` pattern as cgroup_skb. */
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_6,
@@ -72,6 +69,17 @@ static int _bf_cgroup_sock_addr_gen_inline_prologue(struct bf_program *program)
 
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_8, BPF_REG_6,
                               offsetof(struct bpf_sock_addr, protocol)));
+
+    return 0;
+}
+
+static int
+_bf_cgroup_sock_addr_gen_inline_store_pkt_size(struct bf_program *program)
+{
+    assert(program);
+
+    // There is no packet, but the counters stub reads `pkt_size`: zero it out.
+    EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
 
     return 0;
 }
@@ -529,6 +537,7 @@ static int _bf_cgroup_sock_addr_gen_inline_log(struct bf_program *program,
 
 const struct bf_flavor_ops bf_flavor_ops_cgroup_sock_addr = {
     .gen_inline_prologue = _bf_cgroup_sock_addr_gen_inline_prologue,
+    .gen_inline_store_pkt_size = _bf_cgroup_sock_addr_gen_inline_store_pkt_size,
     .gen_inline_epilogue = _bf_cgroup_sock_addr_gen_inline_epilogue,
     .get_verdict = _bf_cgroup_sock_addr_get_verdict,
     .gen_inline_matcher = _bf_cgroup_sock_addr_gen_inline_matcher,

@@ -82,9 +82,8 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
                                   BF_PROG_CTX_OFF(ifindex)));
     }
 
-    /* The L3 protocol derivation reads the address family from r2 (the
-     * nf_hook_state pointer loaded above), so it must be emitted before the
-     * packet size calculation below clobbers r1 and r2. */
+    /* The L3 protocol derivation reads the address family from r2, the
+     * nf_hook_state pointer loaded above. */
     if (needs_parse) {
         /* The BPF Netfilter programs don't provide access to the Ethernet
          * header, so we can't parse it and discover the L3 protocol ID.
@@ -113,22 +112,16 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
              BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_CTX_OFF(l3_offset), 0));
     }
 
-    // Calculate the packet size (+ETH_HLEN) and store it into the runtime context
-    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
-    if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
-        return offset;
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
-    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, ETH_HLEN));
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(pkt_size)));
-
     /* No rule consumes packet-header state: skip the parsing pipeline
      * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
      * stay unwritten as no matcher can read them. */
     if (!needs_parse)
         return 0;
+
+    // The dynptr is created from the skb, chased from the program's argument
+    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
+        return offset;
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
 
     r = bf_stub_make_ctx_skb_dynptr(program, BPF_REG_1);
     if (r)
@@ -141,6 +134,27 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     r = bf_stub_parse_l4_hdr(program);
     if (r)
         return r;
+
+    return 0;
+}
+
+static int _bf_nf_gen_inline_store_pkt_size(struct bf_program *program)
+{
+    int offset;
+
+    assert(program);
+
+    EMIT(program,
+         BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+    if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
+        return offset;
+    EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, offset));
+    if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
+        return offset;
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offset));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, ETH_HLEN));
+    EMIT(program,
+         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, BF_PROG_CTX_OFF(pkt_size)));
 
     return 0;
 }
@@ -204,6 +218,7 @@ static int _bf_nf_get_verdict(enum bf_verdict verdict, int *ret_code)
 
 const struct bf_flavor_ops bf_flavor_ops_nf = {
     .gen_inline_prologue = _bf_nf_gen_inline_prologue,
+    .gen_inline_store_pkt_size = _bf_nf_gen_inline_store_pkt_size,
     .gen_inline_epilogue = _bf_nf_gen_inline_epilogue,
     .get_verdict = _bf_nf_get_verdict,
     .gen_inline_matcher = _bf_nf_gen_inline_matcher,

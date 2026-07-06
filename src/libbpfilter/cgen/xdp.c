@@ -27,8 +27,8 @@
  *
  * The packet-header parsing pipeline is only emitted if the chain consumes
  * its outputs (see @ref bf_chain_needs_pkt_parse ): otherwise the prologue
- * reduces to the `pkt_size` store, plus the `ifindex` store if a rule
- * filters on it (`BF_CHAIN_NEEDS_IFINDEX`).
+ * reduces to the `ifindex` store if a rule filters on it
+ * (`BF_CHAIN_NEEDS_IFINDEX`), or nothing at all.
  *
  * @warning When the parsing pipeline is emitted,
  * @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr for
@@ -57,18 +57,6 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
                                   BF_PROG_CTX_OFF(ifindex)));
     }
 
-    /* Calculate the packet size and store it into the runtime context. r2
-     * (data) and r3 (data_end) are preserved for the direct-access parsing
-     * stub below. */
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                              offsetof(struct xdp_md, data)));
-    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
-                              offsetof(struct xdp_md, data_end)));
-    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_3));
-    EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_4, BPF_REG_2));
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_4, BF_PROG_CTX_OFF(pkt_size)));
-
     /* No rule consumes packet-header state: skip the parsing pipeline
      * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
      * stay unwritten as no matcher can read them. */
@@ -87,6 +75,13 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
         if (r)
             return r;
     } else {
+        /* The direct-access parsing stub expects the packet bounds in r2
+         * (data) and r3 (data_end). r1 still holds the program's argument. */
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                                  offsetof(struct xdp_md, data)));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
+                                  offsetof(struct xdp_md, data_end)));
+
         r = bf_stub_parse_l2l3_hdr_direct(program, &l4_done);
         if (r)
             return r;
@@ -95,6 +90,23 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     r = bf_stub_parse_l4_hdr(program);
     if (r)
         return r;
+
+    return 0;
+}
+
+static int _bf_xdp_gen_inline_store_pkt_size(struct bf_program *program)
+{
+    assert(program);
+
+    EMIT(program,
+         BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                              offsetof(struct xdp_md, data)));
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
+                              offsetof(struct xdp_md, data_end)));
+    EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_3, BPF_REG_2));
+    EMIT(program,
+         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_3, BF_PROG_CTX_OFF(pkt_size)));
 
     return 0;
 }
@@ -164,6 +176,7 @@ static int _bf_xdp_get_verdict(enum bf_verdict verdict, int *ret_code)
 
 const struct bf_flavor_ops bf_flavor_ops_xdp = {
     .gen_inline_prologue = _bf_xdp_gen_inline_prologue,
+    .gen_inline_store_pkt_size = _bf_xdp_gen_inline_store_pkt_size,
     .gen_inline_epilogue = _bf_xdp_gen_inline_epilogue,
     .gen_inline_redirect = _bf_xdp_gen_inline_redirect,
     .get_verdict = _bf_xdp_get_verdict,

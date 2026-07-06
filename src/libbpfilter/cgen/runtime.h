@@ -137,7 +137,10 @@ struct bf_runtime
      * `state_map + rule_index * sizeof(struct bf_rule_state)`. */
     void *state_map;
 
-    /** Total size of the packet, or 0 for non-packet flavors. */
+    /** Total size of the packet, or 0 for non-packet flavors. Not written by
+     * the prologue: the flavor's `gen_inline_store_pkt_size` op derives and
+     * stores it at the `update_counters` and `pkt_log` ELF stub call sites,
+     * its only consumers. */
     __u64 pkt_size;
 
     /** IPv6 extension header mask */

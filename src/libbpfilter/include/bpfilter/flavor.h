@@ -90,7 +90,6 @@ struct bf_flavor_ops
      *
      * When this callback is called during the program generation, @c BPF_REG_1
      * contains the program's argument. It must then:
-     * - Calculate and store the packet's size into the runtime context
      * - Store the input interface index into the runtime context
      * - If L2 is not available, set the L3 protocol ID into @c BPF_REG_7 and
      *   set @c l3_offset in the runtime context to 0.
@@ -98,6 +97,20 @@ struct bf_flavor_ops
      *   @ref bf_stub_parse_l4_hdr depending on which headers are available.
      */
     int (*gen_inline_prologue)(struct bf_program *program);
+
+    /**
+     * @brief Generate bytecode to derive the packet size and store it into
+     *        `bf_runtime.pkt_size`. Required for all flavors.
+     *
+     * The program argument is reloaded from `bf_runtime.arg`: no live
+     * register is assumed, and only @c r1 to @c r3 are clobbered. This op
+     * must be emitted before any `update_counters` or `pkt_log` ELF stub
+     * call, as both stubs read `ctx->pkt_size`.
+     *
+     * @param program Program to generate bytecode for. Can't be NULL.
+     * @return 0 on success, negative errno on error.
+     */
+    int (*gen_inline_store_pkt_size)(struct bf_program *program);
 
     int (*gen_inline_epilogue)(struct bf_program *program);
 
