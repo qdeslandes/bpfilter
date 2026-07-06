@@ -86,7 +86,9 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
          * correctly, since `bf_cmp_get_jmp_ins()` already did. Members
          * only carry cacheable matchers, so only sizes 1, 2, 4, and 16
          * are reachable. Neither path mutates `reg`/`reg + 1` (r3 is the
-         * only scratch), preserving the field cache across the run. */
+         * only scratch, and only for 16-byte halves that don't fit a
+         * sign-extended 32-bit immediate), preserving the field cache
+         * across the run. */
         uint8_t inv_op = (jmp_op == BPF_JNE) ? BPF_JEQ : BPF_JNE;
 
         switch (size) {
@@ -105,14 +107,16 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
             break;
         }
         case 16: {
+            /* Each half compares against a single sign-extended 32-bit
+             * immediate when the reference half permits, and falls back
+             * to `LD_IMM64` into R3 + `JMP_REG` otherwise. */
             const uint8_t *addr = ref;
-            struct bpf_insn ld64_lo[2] = {
-                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr))};
-            struct bpf_insn ld64_hi[2] = {
-                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr + 8))};
-
-            EMIT(program, ld64_lo[0]);
-            EMIT(program, ld64_lo[1]);
+            uint64_t lo_val = bf_read_u64(addr);
+            uint64_t hi_val = bf_read_u64(addr + 8);
+            bool lo_imm = bf_imm64_fits_simm32(lo_val);
+            bool hi_imm = bf_imm64_fits_simm32(hi_val);
+            struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, lo_val)};
+            struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, hi_val)};
 
             if (jmp_op == BPF_JNE) {
                 /* Plain EQ: a match requires both halves equal. A low
@@ -120,22 +124,52 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
                  * through to the next rule (the local jump closes at the
                  * end of the scope, i.e. the end of the member); a full
                  * match jumps to the shared verdict block. */
-                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_get(
-                    program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_default();
 
-                EMIT(program, ld64_hi[0]);
-                EMIT(program, ld64_hi[1]);
-                EMIT_FIXUP_JMP_VERDICT(
-                    program, BPF_JMP_REG(BPF_JEQ, reg + 1, BPF_REG_3, 0));
+                if (lo_imm) {
+                    j0 = bf_jmpctx_get(
+                        program, BPF_JMP_IMM(BPF_JNE, reg,
+                                             (int32_t)(uint32_t)lo_val, 0));
+                } else {
+                    EMIT(program, ld64_lo[0]);
+                    EMIT(program, ld64_lo[1]);
+                    j0 = bf_jmpctx_get(program,
+                                       BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+                }
+
+                if (hi_imm) {
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_IMM(BPF_JEQ, reg + 1,
+                                             (int32_t)(uint32_t)hi_val, 0));
+                } else {
+                    EMIT(program, ld64_hi[0]);
+                    EMIT(program, ld64_hi[1]);
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_REG(BPF_JEQ, reg + 1, BPF_REG_3, 0));
+                }
             } else {
                 // Negated EQ: any differing half is a match.
-                EMIT_FIXUP_JMP_VERDICT(program,
-                                       BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+                if (lo_imm) {
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_IMM(BPF_JNE, reg,
+                                             (int32_t)(uint32_t)lo_val, 0));
+                } else {
+                    EMIT(program, ld64_lo[0]);
+                    EMIT(program, ld64_lo[1]);
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+                }
 
-                EMIT(program, ld64_hi[0]);
-                EMIT(program, ld64_hi[1]);
-                EMIT_FIXUP_JMP_VERDICT(
-                    program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+                if (hi_imm) {
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_IMM(BPF_JNE, reg + 1,
+                                             (int32_t)(uint32_t)hi_val, 0));
+                } else {
+                    EMIT(program, ld64_hi[0]);
+                    EMIT(program, ld64_hi[1]);
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+                }
             }
             break;
         }
@@ -169,38 +203,62 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
         break;
     }
     case 8: {
-        /* 64-bit values: load the immediate in R2 with `LD_IMM64` (2
+        /* 64-bit values: when the reference fits a sign-extended 32-bit
+         * immediate, compare it directly with `JMP_IMM` (the runtime
+         * sign-extends the immediate before the full 64-bit compare).
+         * Otherwise, load the immediate in R2 with `LD_IMM64` (2
          * instruction slots, 1 executed instruction), then compare with
          * `JMP_REG`. */
-        struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, bf_read_u64(ref))};
+        uint64_t val = bf_read_u64(ref);
 
-        EMIT(program, ld64[0]);
-        EMIT(program, ld64[1]);
-        EMIT_FIXUP_JMP_NEXT_RULE(program,
-                                 BPF_JMP_REG(jmp_op, reg, BPF_REG_2, 0));
+        if (bf_imm64_fits_simm32(val)) {
+            EMIT_FIXUP_JMP_NEXT_RULE(
+                program, BPF_JMP_IMM(jmp_op, reg, (int32_t)(uint32_t)val, 0));
+        } else {
+            struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_2, val)};
+
+            EMIT(program, ld64[0]);
+            EMIT(program, ld64[1]);
+            EMIT_FIXUP_JMP_NEXT_RULE(program,
+                                     BPF_JMP_REG(jmp_op, reg, BPF_REG_2, 0));
+        }
         break;
     }
     case 16: {
         /* 128-bit values: reg holds low 64 bits, reg+1 holds high 64 bits.
-         * Compare each half against the reference, loaded in R3 with
-         * `LD_IMM64`. */
+         * Each half compares against a single sign-extended 32-bit
+         * immediate when the reference half permits, and falls back to
+         * `LD_IMM64` into R3 + `JMP_REG` otherwise. */
         const uint8_t *addr = ref;
-        struct bpf_insn ld64_lo[2] = {
-            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr))};
-        struct bpf_insn ld64_hi[2] = {
-            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(addr + 8))};
-
-        EMIT(program, ld64_lo[0]);
-        EMIT(program, ld64_lo[1]);
+        uint64_t lo_val = bf_read_u64(addr);
+        uint64_t hi_val = bf_read_u64(addr + 8);
+        bool lo_imm = bf_imm64_fits_simm32(lo_val);
+        bool hi_imm = bf_imm64_fits_simm32(hi_val);
+        struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, lo_val)};
+        struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, hi_val)};
 
         if (jmp_op == BPF_JNE) {
-            EMIT_FIXUP_JMP_NEXT_RULE(program,
-                                     BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            if (lo_imm) {
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program,
+                    BPF_JMP_IMM(BPF_JNE, reg, (int32_t)(uint32_t)lo_val, 0));
+            } else {
+                EMIT(program, ld64_lo[0]);
+                EMIT(program, ld64_lo[1]);
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            }
 
-            EMIT(program, ld64_hi[0]);
-            EMIT(program, ld64_hi[1]);
-            EMIT_FIXUP_JMP_NEXT_RULE(
-                program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            if (hi_imm) {
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_IMM(BPF_JNE, reg + 1,
+                                         (int32_t)(uint32_t)hi_val, 0));
+            } else {
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            }
         } else {
             /* JEQ: the address must differ in at least one half.
              * If the first half differs, the matcher matched — jump
@@ -211,13 +269,27 @@ int bf_cmp_value(struct bf_program *program, const struct bf_matcher *matcher,
             _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_default();
             _clean_bf_jmpctx_ struct bf_jmpctx j1 = bf_jmpctx_default();
 
-            j0 =
-                bf_jmpctx_get(program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            if (lo_imm) {
+                j0 = bf_jmpctx_get(
+                    program,
+                    BPF_JMP_IMM(BPF_JNE, reg, (int32_t)(uint32_t)lo_val, 0));
+            } else {
+                EMIT(program, ld64_lo[0]);
+                EMIT(program, ld64_lo[1]);
+                j0 = bf_jmpctx_get(program,
+                                   BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            }
 
-            EMIT(program, ld64_hi[0]);
-            EMIT(program, ld64_hi[1]);
-            j1 = bf_jmpctx_get(program,
-                               BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            if (hi_imm) {
+                j1 = bf_jmpctx_get(program,
+                                   BPF_JMP_IMM(BPF_JNE, reg + 1,
+                                               (int32_t)(uint32_t)hi_val, 0));
+            } else {
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                j1 = bf_jmpctx_get(program,
+                                   BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            }
 
             EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_A(0));
         }
@@ -271,20 +343,38 @@ int bf_cmp_masked_value(struct bf_program *program,
 
         _bf_prefix_to_mask(prefixlen, mask, 16);
 
-        // Apply mask to loaded reg/reg+1 if not a full /128
+        /* Apply mask to loaded reg/reg+1 if not a full /128. Each mask
+         * half fitting a sign-extended 32-bit immediate (e.g. an all-ones
+         * half) uses a single `ALU64_IMM` AND — `ALU64` immediates
+         * sign-extend exactly like jump immediates — the others load the
+         * mask in R3 with `LD_IMM64` first. */
         if (mask[_BF_MASK_LAST_BYTE] != (uint8_t)~0) {
-            struct bpf_insn mask_lo[2] = {
-                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(mask))};
-            struct bpf_insn mask_hi[2] = {
-                BPF_LD_IMM64(BPF_REG_3, bf_read_u64(mask + 8))};
+            uint64_t mask_lo_val = bf_read_u64(mask);
+            uint64_t mask_hi_val = bf_read_u64(mask + 8);
 
-            EMIT(program, mask_lo[0]);
-            EMIT(program, mask_lo[1]);
-            EMIT(program, BPF_ALU64_REG(BPF_AND, reg, BPF_REG_3));
+            if (bf_imm64_fits_simm32(mask_lo_val)) {
+                EMIT(program, BPF_ALU64_IMM(BPF_AND, reg,
+                                            (int32_t)(uint32_t)mask_lo_val));
+            } else {
+                struct bpf_insn mask_lo[2] = {
+                    BPF_LD_IMM64(BPF_REG_3, mask_lo_val)};
 
-            EMIT(program, mask_hi[0]);
-            EMIT(program, mask_hi[1]);
-            EMIT(program, BPF_ALU64_REG(BPF_AND, reg + 1, BPF_REG_3));
+                EMIT(program, mask_lo[0]);
+                EMIT(program, mask_lo[1]);
+                EMIT(program, BPF_ALU64_REG(BPF_AND, reg, BPF_REG_3));
+            }
+
+            if (bf_imm64_fits_simm32(mask_hi_val)) {
+                EMIT(program, BPF_ALU64_IMM(BPF_AND, reg + 1,
+                                            (int32_t)(uint32_t)mask_hi_val));
+            } else {
+                struct bpf_insn mask_hi[2] = {
+                    BPF_LD_IMM64(BPF_REG_3, mask_hi_val)};
+
+                EMIT(program, mask_hi[0]);
+                EMIT(program, mask_hi[1]);
+                EMIT(program, BPF_ALU64_REG(BPF_AND, reg + 1, BPF_REG_3));
+            }
         }
 
         for (int i = 0; i < 8; i++)
@@ -292,33 +382,63 @@ int bf_cmp_masked_value(struct bf_program *program,
         for (int i = 0; i < 8; i++)
             masked_hi[i] = addr[i + 8] & mask[i + 8];
 
-        struct bpf_insn ld64_lo[2] = {
-            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(masked_lo))};
-        struct bpf_insn ld64_hi[2] = {
-            BPF_LD_IMM64(BPF_REG_3, bf_read_u64(masked_hi))};
-
-        EMIT(program, ld64_lo[0]);
-        EMIT(program, ld64_lo[1]);
+        /* Compare each masked half: a single sign-extended 32-bit
+         * immediate compare when the reference half permits, otherwise
+         * `LD_IMM64` into R3 + `JMP_REG`. */
+        uint64_t lo_val = bf_read_u64(masked_lo);
+        uint64_t hi_val = bf_read_u64(masked_hi);
+        bool lo_imm = bf_imm64_fits_simm32(lo_val);
+        bool hi_imm = bf_imm64_fits_simm32(hi_val);
+        struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, lo_val)};
+        struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, hi_val)};
 
         if (jmp_op == BPF_JNE) {
-            EMIT_FIXUP_JMP_NEXT_RULE(program,
-                                     BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            if (lo_imm) {
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program,
+                    BPF_JMP_IMM(BPF_JNE, reg, (int32_t)(uint32_t)lo_val, 0));
+            } else {
+                EMIT(program, ld64_lo[0]);
+                EMIT(program, ld64_lo[1]);
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            }
 
-            EMIT(program, ld64_hi[0]);
-            EMIT(program, ld64_hi[1]);
-            EMIT_FIXUP_JMP_NEXT_RULE(
-                program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            if (hi_imm) {
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_IMM(BPF_JNE, reg + 1,
+                                         (int32_t)(uint32_t)hi_val, 0));
+            } else {
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                EMIT_FIXUP_JMP_NEXT_RULE(
+                    program, BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            }
         } else {
             _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_default();
             _clean_bf_jmpctx_ struct bf_jmpctx j1 = bf_jmpctx_default();
 
-            j0 =
-                bf_jmpctx_get(program, BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            if (lo_imm) {
+                j0 = bf_jmpctx_get(
+                    program,
+                    BPF_JMP_IMM(BPF_JNE, reg, (int32_t)(uint32_t)lo_val, 0));
+            } else {
+                EMIT(program, ld64_lo[0]);
+                EMIT(program, ld64_lo[1]);
+                j0 = bf_jmpctx_get(program,
+                                   BPF_JMP_REG(BPF_JNE, reg, BPF_REG_3, 0));
+            }
 
-            EMIT(program, ld64_hi[0]);
-            EMIT(program, ld64_hi[1]);
-            j1 = bf_jmpctx_get(program,
-                               BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            if (hi_imm) {
+                j1 = bf_jmpctx_get(program,
+                                   BPF_JMP_IMM(BPF_JNE, reg + 1,
+                                               (int32_t)(uint32_t)hi_val, 0));
+            } else {
+                EMIT(program, ld64_hi[0]);
+                EMIT(program, ld64_hi[1]);
+                j1 = bf_jmpctx_get(program,
+                                   BPF_JMP_REG(BPF_JNE, reg + 1, BPF_REG_3, 0));
+            }
 
             EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_A(0));
         }

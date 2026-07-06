@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -28,6 +29,26 @@ static inline uint64_t bf_read_u64(const void *ptr)
     memcpy(&val, ptr, sizeof(val));
 
     return val;
+}
+
+/**
+ * @brief Check whether a 64-bit value fits a sign-extended 32-bit immediate.
+ *
+ * `BPF_JMP_IMM` and `BPF_ALU64_IMM` sign-extend their `s32` immediate to
+ * 64 bits before performing the full-width operation. When this predicate
+ * holds — i.e., the value lies in `[0, INT32_MAX]` or
+ * `[0xffffffff80000000, UINT64_MAX]` — the single-immediate form is exact
+ * for equality tests, unsigned compares, and `ALU64` bitwise operations
+ * alike, since all of them operate on the full 64-bit sign-extended
+ * pattern.
+ *
+ * @param value Value to check.
+ * @return True if the value's truncated low 32 bits, sign-extended by the
+ *         BPF runtime, reproduce the original 64-bit pattern.
+ */
+static inline bool bf_imm64_fits_simm32(uint64_t value)
+{
+    return (int64_t)value == (int64_t)(int32_t)(uint32_t)value;
 }
 
 /**

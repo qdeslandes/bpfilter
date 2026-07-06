@@ -110,11 +110,13 @@
  *    from the reference payloads exactly as the runtime loads read the
  *    packet field, by the same host: the ordering is consistent even
  *    though the bytes are network-ordered, and equality is
- *    byte-order-agnostic. No tree instruction mutates `r1`/`r2` (`r3` is
- *    the only scratch), so the cache soundness argument of stage 2
- *    carries over both into and out of the block. Every leaf chunk's
- *    miss converges on the block's next-rule jump, landing on the rule
- *    following the block.
+ *    byte-order-agnostic. 16-byte compares use a single sign-extended
+ *    32-bit immediate compare when the reference half permits, falling
+ *    back to `LD_IMM64` into `r3` otherwise: no tree instruction mutates
+ *    `r1`/`r2` (`r3` is the only scratch the tree may touch), so the
+ *    cache soundness argument of stage 2 carries over both into and out
+ *    of the block. Every leaf chunk's miss converges on the block's
+ *    next-rule jump, landing on the rule following the block.
  */
 
 #define BF_IPV6_EH_HOPOPTS(x) ((x) << 0)
@@ -192,10 +194,10 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
 
     /* Only matchers dispatched to `_bf_matcher_pkt_load_and_cmp()`: every
      * `bf_cmp_value()` size path they use (1, 2, 4, and 16 bytes) leaves
-     * the loaded registers unmodified (the 16-byte compare loads its
-     * reference into `r3`, the smaller compares use immediates). The
-     * `negate` flag only flips the jump opcode, so negated matchers
-     * remain cacheable. */
+     * the loaded registers unmodified (the 16-byte compare uses immediate
+     * compares or loads its reference into `r3`, the smaller compares use
+     * immediates). The `negate` flag only flips the jump opcode, so
+     * negated matchers remain cacheable. */
     switch (bf_matcher_get_type(matcher)) {
     case BF_MATCHER_IP4_SADDR:
     case BF_MATCHER_IP4_DADDR:
@@ -292,7 +294,9 @@ static int _bf_tree_key_cmp(const void *lhs, const void *rhs)
  * Each value emits the same compare shape as the verdict-run member path
  * in `bf_cmp_value()`: a match jumps to the block's shared verdict pair
  * (pending `BF_FIXUP_TYPE_JMP_VERDICT` fixup), a miss falls through to
- * the next value. The chunk closes with an unconditional
+ * the next value. 16-byte halves fitting a sign-extended 32-bit immediate
+ * compare against it directly; the others load their reference into `r3`
+ * with `LD_IMM64` first. The chunk closes with an unconditional
  * `BF_FIXUP_TYPE_JMP_NEXT_RULE` jump: a miss must jump over the shared
  * verdict block, never fall into it.
  *
@@ -321,23 +325,42 @@ static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
                 BPF_JMP32_IMM(BPF_JEQ, BPF_REG_1, (uint32_t)keys[i].k0, 0));
             break;
         case 16: {
-            struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, keys[i].k0)};
-            struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, keys[i].k1)};
+            uint64_t lo_val = keys[i].k0;
+            uint64_t hi_val = keys[i].k1;
+            bool lo_imm = bf_imm64_fits_simm32(lo_val);
+            bool hi_imm = bf_imm64_fits_simm32(hi_val);
+            struct bpf_insn ld64_lo[2] = {BPF_LD_IMM64(BPF_REG_3, lo_val)};
 
-            EMIT(program, ld64_lo[0]);
-            EMIT(program, ld64_lo[1]);
+            struct bpf_insn ld64_hi[2] = {BPF_LD_IMM64(BPF_REG_3, hi_val)};
 
             {
                 /* Low half mismatch: skip the high half check and fall
                  * through to the next value's compare. */
-                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_get(
-                    program, BPF_JMP_REG(BPF_JNE, BPF_REG_1, BPF_REG_3, 0));
+                _clean_bf_jmpctx_ struct bf_jmpctx j0 = bf_jmpctx_default();
 
-                EMIT(program, ld64_hi[0]);
-                EMIT(program, ld64_hi[1]);
-                EMIT_FIXUP_JMP_VERDICT(
-                    program, BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_3, 0));
+                if (lo_imm) {
+                    j0 = bf_jmpctx_get(
+                        program, BPF_JMP_IMM(BPF_JNE, BPF_REG_1,
+                                             (int32_t)(uint32_t)lo_val, 0));
+                } else {
+                    EMIT(program, ld64_lo[0]);
+                    EMIT(program, ld64_lo[1]);
+                    j0 = bf_jmpctx_get(
+                        program, BPF_JMP_REG(BPF_JNE, BPF_REG_1, BPF_REG_3, 0));
+                }
+
+                if (hi_imm) {
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2,
+                                             (int32_t)(uint32_t)hi_val, 0));
+                } else {
+                    EMIT(program, ld64_hi[0]);
+                    EMIT(program, ld64_hi[1]);
+                    EMIT_FIXUP_JMP_VERDICT(
+                        program, BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_3, 0));
+                }
             }
+
             break;
         }
         default:
@@ -357,7 +380,9 @@ static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
  * Ranges of at most `_BF_TREE_LEAF_MAX` values emit a leaf chunk; larger
  * ranges emit an internal node: an unsigned strict-greater compare
  * against the pivot (the middle key) jumping to the right subtree, so the
- * left subtree keeps pivot equality.
+ * left subtree keeps pivot equality. 16-byte pivots fitting a
+ * sign-extended 32-bit immediate compare against it directly; the others
+ * load the pivot into `r3` with `LD_IMM64` first.
  *
  * For 16-byte fields, internal nodes pivot on `k0` only: the pivot index
  * is first extended to the last entry sharing its `k0`, so every entry
@@ -409,15 +434,24 @@ static int _bf_tree_emit_range(struct bf_program *program,
         _clean_bf_jmpctx_ struct bf_jmpctx right = bf_jmpctx_default();
 
         if (size == 16) {
-            struct bpf_insn ld64[2] = {BPF_LD_IMM64(
-                BPF_REG_3, pivot_on_k1 ? keys[mid].k1 : keys[mid].k0)};
+            uint64_t pivot = pivot_on_k1 ? keys[mid].k1 : keys[mid].k0;
+            int pivot_reg = pivot_on_k1 ? BPF_REG_2 : BPF_REG_1;
 
-            EMIT(program, ld64[0]);
-            EMIT(program, ld64[1]);
-            right = bf_jmpctx_get(
-                program,
-                BPF_JMP_REG(BPF_JGT, pivot_on_k1 ? BPF_REG_2 : BPF_REG_1,
-                            BPF_REG_3, 0));
+            /* Unsigned `JGT` against the sign-extended immediate compares
+             * the same raw 64-bit patterns as the `JMP_REG` form, so the
+             * partition is unchanged. */
+            if (bf_imm64_fits_simm32(pivot)) {
+                right = bf_jmpctx_get(program,
+                                      BPF_JMP_IMM(BPF_JGT, pivot_reg,
+                                                  (int32_t)(uint32_t)pivot, 0));
+            } else {
+                struct bpf_insn ld64[2] = {BPF_LD_IMM64(BPF_REG_3, pivot)};
+
+                EMIT(program, ld64[0]);
+                EMIT(program, ld64[1]);
+                right = bf_jmpctx_get(
+                    program, BPF_JMP_REG(BPF_JGT, pivot_reg, BPF_REG_3, 0));
+            }
         } else {
             right = bf_jmpctx_get(
                 program,
