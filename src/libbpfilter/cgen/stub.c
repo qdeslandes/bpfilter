@@ -488,6 +488,51 @@ static int _bf_stub_derive_l4(struct bf_program *program, uint32_t l3_offset)
     return 0;
 }
 
+/**
+ * @brief Emit the compare-chain form of the L4 protocol normalization.
+ *
+ * Same @c r8 normalization semantics as the swich shape used by
+ * @ref bf_stub_parse_l4_hdr : @c r8 is left untouched when it holds a
+ * supported L4 protocol ID, and zeroed otherwise. Supported protocols land on
+ * the first instruction emitted after this helper returns; unsupported
+ * protocols go through @p miss , which the caller closes past its @c r9
+ * pinning block, preserving the r9-written-only-behind-a-supported-r8
+ * invariant relied upon by the per-rule L4 guards.
+ *
+ * Unlike the swich, this form doesn't select the L4 header size into @c r4 :
+ * it is only valid when the size register is dead, i.e. when the chain
+ * doesn't store `bf_runtime.l4_size` ( @c BF_CHAIN_LOG unset) and no slice
+ * request consumes the size.
+ *
+ * @param program Program to emit instructions into. Can't be NULL.
+ * @param miss Jump context for the unsupported L4 protocol case, initialized
+ *        by this function and closed by the caller. Can't be NULL.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_stub_normalize_l4_proto(struct bf_program *program,
+                                       struct bf_jmpctx *miss)
+{
+    static const int protos[] = {IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP,
+                                 IPPROTO_ICMPV6};
+    struct bf_jmpctx matchjmps[ARRAY_SIZE(protos)];
+
+    assert(program);
+    assert(miss);
+
+    for (size_t i = 0; i < ARRAY_SIZE(protos); ++i) {
+        matchjmps[i] = bf_jmpctx_get(
+            program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, protos[i], 0));
+    }
+
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+    *miss = bf_jmpctx_get(program, BPF_JMP_A(0));
+
+    for (size_t i = 0; i < ARRAY_SIZE(protos); ++i)
+        bf_jmpctx_cleanup(&matchjmps[i]);
+
+    return 0;
+}
+
 int bf_stub_parse_l3_hdr(struct bf_program *program)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx skip = bf_jmpctx_default();
@@ -616,10 +661,14 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
         EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                   offsetof(struct iphdr, protocol)));
 
-        /* Same swich shape as bf_stub_parse_l4_hdr(), preserving the r8
-         * normalization semantics relied upon by meta.l4_proto and the
-         * per-rule L4 guards. */
-        {
+        /* Same r8 normalization semantics as bf_stub_parse_l4_hdr(), relied
+         * upon by meta.l4_proto and the per-rule L4 guards: r8 is untouched
+         * for supported L4 protocols, zeroed otherwise, and r9 is only
+         * written behind a supported r8. Logging chains keep the swich shape,
+         * as the header size it selects into r4 feeds the l4_size store; on
+         * other chains the size register is dead and the compare-chain form
+         * is emitted instead. */
+        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
             _clean_bf_swich_ struct bf_swich swich =
                 bf_swich_get(program, BPF_REG_8);
 
@@ -637,17 +686,20 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
             r = bf_swich_generate(&swich);
             if (r)
                 return r;
-        }
 
-        /* Unsupported L4 protocols skip the r9 pinning, as in
-         * bf_stub_parse_l4_hdr(): r9 stays unwritten, and the per-rule L4
-         * guards on r8 keep the matchers unreachable on this path. */
-        zerojmp = bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
+            /* Unsupported L4 protocols skip the r9 pinning, as in
+             * bf_stub_parse_l4_hdr(): r9 stays unwritten, and the per-rule L4
+             * guards on r8 keep the matchers unreachable on this path. */
+            zerojmp =
+                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
-        // l4_size is only read by the packet logging ELF stub
-        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
+            // l4_size is only read by the packet logging ELF stub
             EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
                                       BF_PROG_CTX_OFF(l4_size)));
+        } else {
+            r = _bf_stub_normalize_l4_proto(program, &zerojmp);
+            if (r)
+                return r;
         }
 
         // Pin the L4 header address in r9 for the program's lifetime
@@ -701,7 +753,7 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
     struct bf_jmpctx slowjmps[_BF_DIRECT_SLOW_JMPS_MAX] = {};
     struct bf_jmpctx donejmps[3] = {};
     struct bf_jmpctx endjmps[3] = {};
-    struct bf_jmpctx shortjmp, tailjmp, ip4jmp, ip6jmp;
+    struct bf_jmpctx shortjmp, tailjmp, ip4jmp, ip6jmp, tcpjmp, udpjmp;
     size_t n_slow = 0;
     size_t n_done = 0;
     size_t n_end = 0;
@@ -798,10 +850,17 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
             EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
                                       offsetof(struct iphdr, protocol)));
 
-            /* Same swich shape as bf_stub_parse_l4_hdr(), preserving the r8
-             * normalization semantics relied upon by meta.l4_proto and the
-             * per-rule L4 guards. */
-            {
+            /* Same r8 normalization semantics as bf_stub_parse_l4_hdr(),
+             * relied upon by meta.l4_proto and the per-rule L4 guards: r8 is
+             * untouched for supported L4 protocols, zeroed otherwise, and r9
+             * is only written behind a supported r8. Unsupported protocols
+             * skip the r9 pinning but still go through l4_done, as
+             * bf_stub_parse_l4_hdr() has nothing left to do for them.
+             * Logging chains keep the swich shape, as the header size it
+             * selects into r4 feeds the l4_size store; on other chains the
+             * size register is dead and the compare-chain form is emitted
+             * instead. */
+            if (flags & BF_FLAG(BF_CHAIN_LOG)) {
                 _clean_bf_swich_ struct bf_swich swich =
                     bf_swich_get(program, BPF_REG_8);
 
@@ -822,19 +881,17 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
                 r = bf_swich_generate(&swich);
                 if (r)
                     return r;
-            }
 
-            /* Unsupported L4 protocols skip the r9 pinning: r9 stays
-             * unwritten, and the per-rule L4 guards on r8 keep the matchers
-             * unreachable on this path. They still go through l4_done, as
-             * bf_stub_parse_l4_hdr() has nothing left to do for them. */
-            donejmps[n_done++] =
-                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
+                donejmps[n_done++] = bf_jmpctx_get(
+                    program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
 
-            // l4_size is only read by the packet logging ELF stub
-            if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+                // l4_size is only read by the packet logging ELF stub
                 EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
                                           BF_PROG_CTX_OFF(l4_size)));
+            } else {
+                r = _bf_stub_normalize_l4_proto(program, &donejmps[n_done++]);
+                if (r)
+                    return r;
             }
 
             /* Pin the L4 header address in r9 for the program's lifetime:
@@ -879,9 +936,11 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
         /* Same EH detection sequence as _bf_stub_derive_l4(), with two
          * differences: packets carrying an extension header jump to the slow
          * path (the EH parsing ELF stubs need the dynptr), and the bitmask
-         * uses r1/r4 as scratch registers to preserve data_end in r3. */
+         * uses r1/r4 as scratch registers to preserve data_end in r3. The
+         * tcpjmp and udpjmp escapes are closed by the L4 handling blocks
+         * below, past the normalization when it is an identity for TCP and
+         * UDP. */
         {
-            struct bf_jmpctx tcpjmp, udpjmp;
             struct bpf_insn ld64[2] = {
                 BPF_LD_IMM64(BPF_REG_1, _BF_LOW_EH_BITMASK)};
 
@@ -915,45 +974,63 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
                 bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 139, 0));
             slowjmps[n_slow++] =
                 bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 140, 0));
-
-            // If no EH matched, nexthdr is L4
-            bf_jmpctx_cleanup(&tcpjmp);
-            bf_jmpctx_cleanup(&udpjmp);
         }
 
         if (flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR)) {
             struct bf_jmpctx okjmp;
 
-            /* Same swich shape as bf_stub_parse_l4_hdr(), preserving the r8
-             * normalization semantics relied upon by meta.l4_proto and the
-             * per-rule L4 guards. */
-            {
-                _clean_bf_swich_ struct bf_swich swich =
-                    bf_swich_get(program, BPF_REG_8);
+            /* Same r8 normalization semantics as bf_stub_parse_l4_hdr(),
+             * relied upon by meta.l4_proto and the per-rule L4 guards: r8 is
+             * untouched for supported L4 protocols, zeroed otherwise, and r9
+             * is only written behind a supported r8. Unsupported protocols
+             * skip the bounds check and the r9 pinning, going through l4_done
+             * as on the IPv4 fast path. Logging chains keep the swich shape,
+             * as the header size it selects into r4 feeds the l4_size store;
+             * on other chains the size register is dead and the compare-chain
+             * form is emitted instead. */
+            if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+                /* If no EH matched, nexthdr is L4: TCP and UDP go through
+                 * the swich too, as it selects their header size into r4. */
+                bf_jmpctx_cleanup(&tcpjmp);
+                bf_jmpctx_cleanup(&udpjmp);
 
-                EMIT_SWICH_OPTION(
-                    &swich, IPPROTO_TCP,
-                    BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
-                EMIT_SWICH_OPTION(
-                    &swich, IPPROTO_UDP,
-                    BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
-                EMIT_SWICH_OPTION(
-                    &swich, IPPROTO_ICMP,
-                    BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
-                EMIT_SWICH_OPTION(
-                    &swich, IPPROTO_ICMPV6,
-                    BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
-                EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
+                {
+                    _clean_bf_swich_ struct bf_swich swich =
+                        bf_swich_get(program, BPF_REG_8);
 
-                r = bf_swich_generate(&swich);
+                    EMIT_SWICH_OPTION(
+                        &swich, IPPROTO_TCP,
+                        BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
+                    EMIT_SWICH_OPTION(
+                        &swich, IPPROTO_UDP,
+                        BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
+                    EMIT_SWICH_OPTION(
+                        &swich, IPPROTO_ICMP,
+                        BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
+                    EMIT_SWICH_OPTION(
+                        &swich, IPPROTO_ICMPV6,
+                        BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
+                    EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
+
+                    r = bf_swich_generate(&swich);
+                    if (r)
+                        return r;
+                }
+
+                donejmps[n_done++] = bf_jmpctx_get(
+                    program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
+            } else {
+                r = _bf_stub_normalize_l4_proto(program, &donejmps[n_done++]);
                 if (r)
                     return r;
-            }
 
-            /* Unsupported L4 protocols skip the bounds check and the r9
-             * pinning, going through l4_done as on the IPv4 fast path. */
-            donejmps[n_done++] =
-                bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
+                /* TCP and UDP escape the EH detection straight to the
+                 * compare chain's match target: r8 already holds a supported
+                 * protocol on those paths, so the normalization is an
+                 * identity for them. */
+                bf_jmpctx_cleanup(&tcpjmp);
+                bf_jmpctx_cleanup(&udpjmp);
+            }
 
             /* Second bounds check: the combined window ends exactly at the
              * end of the fixed IPv6 header, so the L4 window is checked
@@ -1002,6 +1079,10 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
                 bf_jmpctx_cleanup(&donejmps[i]);
             *l4_done = bf_jmpctx_get(program, BPF_JMP_A(0));
         } else {
+            // If no EH matched, nexthdr is L4
+            bf_jmpctx_cleanup(&tcpjmp);
+            bf_jmpctx_cleanup(&udpjmp);
+
             /* r8 holds the raw nexthdr value, normalized by the chain in
              * bf_stub_parse_l4_hdr() after the stub. */
             endjmps[n_end++] = bf_jmpctx_get(program, BPF_JMP_A(0));
