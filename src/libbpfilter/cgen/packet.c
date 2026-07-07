@@ -51,7 +51,11 @@
  *    IPv4 fast path of the L2 flavors, `R9` aliases the combined L2+L3
  *    slice (`R6 + sizeof(struct iphdr)`) instead of a dedicated L4
  *    slice; both point to enough verifier-visible bytes for every fixed
- *    L4 header load.
+ *    L4 header load. The TCP/UDP port matchers read their field as a
+ *    2-byte load from the pinned `R9` L4 register like the ICMP
+ *    matchers, so their EQ path goes through the same cache-aware load
+ *    below; only their RANGE path keeps a private load, as it mutates
+ *    `R1` with a byte swap before the compare.
  *
  *    `_bf_matcher_pkt_load_and_cmp()` skips the load entirely when
  *    `bf_program.field_cache` records that the previous rule left the
@@ -192,12 +196,16 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
     if (bf_matcher_get_op(matcher) != BF_MATCHER_EQ)
         return false;
 
-    /* Only matchers dispatched to `_bf_matcher_pkt_load_and_cmp()`: every
-     * `bf_cmp_value()` size path they use (1, 2, 4, and 16 bytes) leaves
-     * the loaded registers unmodified (the 16-byte compare uses immediate
-     * compares or loads its reference into `r3`, the smaller compares use
-     * immediates). The `negate` flag only flips the jump opcode, so
-     * negated matchers remain cacheable. */
+    /* Only matchers whose EQ path dispatches to
+     * `_bf_matcher_pkt_load_and_cmp()`: every `bf_cmp_value()` size path
+     * they use (1, 2, 4, and 16 bytes) leaves the loaded registers
+     * unmodified (the 16-byte compare uses immediate compares or loads
+     * its reference into `r3`, the smaller compares use immediates). The
+     * `negate` flag only flips the jump opcode, so negated matchers
+     * remain cacheable. The TCP/UDP port matchers qualify for EQ only:
+     * the `op != BF_MATCHER_EQ` check above keeps their RANGE path
+     * (which mutates `r1` with a `BPF_BSWAP` before `bf_cmp_range()`)
+     * and IN out of the cache. */
     switch (bf_matcher_get_type(matcher)) {
     case BF_MATCHER_IP4_SADDR:
     case BF_MATCHER_IP4_DADDR:
@@ -208,6 +216,10 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
     case BF_MATCHER_ICMP_CODE:
     case BF_MATCHER_ICMPV6_TYPE:
     case BF_MATCHER_ICMPV6_CODE:
+    case BF_MATCHER_TCP_SPORT:
+    case BF_MATCHER_TCP_DPORT:
+    case BF_MATCHER_UDP_SPORT:
+    case BF_MATCHER_UDP_DPORT:
         return true;
     default:
         return false;
@@ -575,12 +587,17 @@ static int _bf_matcher_pkt_generate_port(struct bf_program *program,
 {
     int r;
 
-    r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
-    if (r)
-        return r;
-
     if (bf_matcher_get_op(matcher) == BF_MATCHER_RANGE) {
         uint16_t *ports = (uint16_t *)bf_matcher_payload(matcher);
+
+        /* RANGE matchers are not cacheable, so their rule is never
+         * run-eligible and the field cache is invalidated at rule entry:
+         * the unconditional load and the BSWAP mutation of R1 below can
+         * never corrupt a published cache. */
+        r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
+        if (r)
+            return r;
+
         /* Convert the big-endian value stored in the packet into a
          * little-endian value for x86 and arm before comparing it to the
          * reference value. This is a JLT/JGT comparison, we need to have the
@@ -589,8 +606,7 @@ static int _bf_matcher_pkt_generate_port(struct bf_program *program,
         return bf_cmp_range(program, matcher, ports[0], ports[1], BPF_REG_1);
     }
 
-    return bf_cmp_value(program, matcher, bf_matcher_payload(matcher),
-                        meta->hdr_payload_size, BPF_REG_1);
+    return _bf_matcher_pkt_load_and_cmp(program, matcher, meta);
 }
 
 static int
