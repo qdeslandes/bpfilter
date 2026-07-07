@@ -16,6 +16,38 @@
 #include "cgen/program.h"
 #include "cgen/stub.h"
 
+/** Maximum number of elements a set may hold to be inlined as a search
+ * tree instead of a BPF map lookup. */
+#define _BF_SET_INLINE_MAX_ELEMS 128
+
+bool bf_set_is_inline_eligible(const struct bf_set *set)
+{
+    const struct bf_matcher_meta *meta;
+    size_t n_elems;
+
+    assert(set);
+
+    if (set->use_trie || set->n_comps != 1)
+        return false;
+
+    n_elems = bf_hashset_size(&set->elems);
+    if (n_elems < 1 || n_elems > _BF_SET_INLINE_MAX_ELEMS)
+        return false;
+
+    meta = bf_matcher_get_meta(set->key[0]);
+    if (!meta || bf_stub_hdr_reg(meta) < 0)
+        return false;
+
+    if (meta->hdr_payload_size != 1 && meta->hdr_payload_size != 2 &&
+        meta->hdr_payload_size != 4 && meta->hdr_payload_size != 16)
+        return false;
+
+    /* The tree compares the field bytes against the element bytes: both
+     * must be the exact same bytes the map path would have stored as the
+     * lookup key via `bf_stub_stx_payload()`. */
+    return meta->hdr_payload_size == set->elem_size;
+}
+
 int bf_set_generate_map_lookup(struct bf_program *program,
                                const struct bf_matcher *matcher, int key_offset)
 {

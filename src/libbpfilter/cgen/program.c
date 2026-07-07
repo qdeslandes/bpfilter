@@ -176,6 +176,14 @@ static int _bf_program_build_set_groups(struct bf_program *program)
         if (bf_hashset_is_empty(&set->elems))
             continue;
 
+        /* Inline-eligible sets (see `bf_set_is_inline_eligible()`) keep
+         * their group and their BPF map even though the packet-flavor
+         * codegen replaces their per-packet lookup with an inline search
+         * tree: the pinned `bf_set_*` maps are user-visible artifacts of
+         * the chain, and creating them is a load-time cost only. Their
+         * map simply ends up with no `BF_FIXUP_TYPE_SET_MAP_FD` reference,
+         * which `_bf_program_fixup()` handles naturally. */
+
         /* LPM trie sets are not grouped: BPF LPM trie lookup always
          * returns the longest-prefix match, so the read-modify-write
          * step in _bf_program_load_sets_maps() can't preserve the
@@ -425,6 +433,7 @@ static int _bf_program_fixup(struct bf_program *program,
         case BF_FIXUP_TYPE_JMP_NEXT_RULE:
         case BF_FIXUP_TYPE_JMP_GUARD_MISS:
         case BF_FIXUP_TYPE_JMP_VERDICT:
+        case BF_FIXUP_TYPE_JMP_MATCH:
             insn_type = BF_FIXUP_INSN_OFF;
             value = (int)(program->img.size - fixup->insn - 1U);
             break;
@@ -477,6 +486,11 @@ static int _bf_program_fixup(struct bf_program *program,
     }
 
     return 0;
+}
+
+int bf_program_fixup(struct bf_program *program, enum bf_fixup_type type)
+{
+    return _bf_program_fixup(program, type);
 }
 
 /* Pseudo-layer bit tracking the dual TCP/UDP guard in `checked_layers`: the

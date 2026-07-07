@@ -39,6 +39,11 @@ enum bf_fixup_type
      * lazily when the run closes, right before the closing rule emits its
      * `MOV r0`. */
     BF_FIXUP_TYPE_JMP_VERDICT,
+    /** Jump to the end of the current matcher's inline block, where execution
+     * continues with the rest of the rule. Emitted and resolved within a
+     * single matcher's codegen (see `_bf_matcher_pkt_generate_set_inline()`
+     * in packet.c), so it never leaks into the rule-level resolutions. */
+    BF_FIXUP_TYPE_JMP_MATCH,
     /// Set the counters map file descriptor in the @c BPF_LD_MAP_FD instruction.
     BF_FIXUP_TYPE_COUNTERS_MAP_FD,
     /// Set the printer map file descriptor in the @c BPF_LD_MAP_FD instruction.

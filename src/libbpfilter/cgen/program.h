@@ -374,6 +374,23 @@ int bf_program_emit_fixup(struct bf_program *program, enum bf_fixup_type type,
                           const union bf_fixup_attr *attr);
 int bf_program_emit_fixup_elfstub(struct bf_program *program,
                                   enum bf_elfstub_id id);
+
+/**
+ * @brief Resolve all pending fixups of a given type.
+ *
+ * Jump fixups (`BF_FIXUP_TYPE_JMP_*`) resolve to the current end of the
+ * program's image; map FD and ELF stub fixups patch their instruction's
+ * immediate. Resolved fixups are removed from the pending list. Exposed for
+ * matcher codegen resolving locally-scoped jumps (see
+ * `BF_FIXUP_TYPE_JMP_MATCH`); the rule- and program-level resolutions stay
+ * in program.c.
+ *
+ * @param program Program to resolve the fixups of. Can't be NULL.
+ * @param type Type of the fixups to resolve.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+int bf_program_fixup(struct bf_program *program, enum bf_fixup_type type);
+
 int bf_program_generate(struct bf_program *program);
 
 /**

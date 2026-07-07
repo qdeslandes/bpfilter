@@ -128,6 +128,29 @@
  *    cache soundness argument of stage 2 carries over both into and out
  *    of the block. Every leaf chunk's miss converges on the block's
  *    next-rule jump, landing on the rule following the block.
+ *
+ * 5. Inline sets: a `BF_MATCHER_SET` matcher on an inline-eligible set
+ *    (hash-keyed, single key component read from a pinned header register,
+ *    field size supported by the tree emitter, small enough; see
+ *    `bf_set_is_inline_eligible()`) reuses the search-tree shape of
+ *    stage 4 over the set's elements instead of the map lookup, dropping
+ *    the `map_lookup_elem` call, the key stores, and the bitmask load from
+ *    the per-packet path. The field load is safe for the same reason the
+ *    map path's `bf_stub_stx_payload()` is: the rule's protocol guards
+ *    expand `BF_MATCHER_SET` into its key components, so the pinned header
+ *    register is established before the load. The tree's hit/miss jumps
+ *    are picked from the matcher's polarity: a non-negated `in` sends
+ *    element hits to a local `BF_FIXUP_TYPE_JMP_MATCH` label resolved
+ *    right after the block (where the rest of the rule continues) and
+ *    misses to the next rule; a negated `in` swaps the two. Inlining the
+ *    elements at codegen time is correct because sets are codegen-time
+ *    constants: `bf_chain_update_set()` copies the chain, mutates the set,
+ *    and regenerates every program through `bf_cgen_update()`, so an
+ *    updated set re-decides inline-vs-map on its next generation.
+ *    Inlined sets keep their group and their pinned BPF map — a
+ *    load-time-only, user-visible artifact of the chain — the map just
+ *    ends up with no `BF_FIXUP_TYPE_SET_MAP_FD` reference (see
+ *    `_bf_program_build_set_groups()` in program.c).
  */
 
 #define BF_IPV6_EH_HOPOPTS(x) ((x) << 0)
@@ -310,39 +333,81 @@ static int _bf_tree_key_cmp(const void *lhs, const void *rhs)
 }
 
 /**
+ * @brief Read a reference value into a tree key.
+ *
+ * Reads the value exactly as `bf_cmp_value()` and the runtime field loads
+ * do, so codegen-time ordering matches the emitted compares on any host
+ * endianness. `key` must be zero-initialized: sizes below 16 bytes leave
+ * `k1` untouched.
+ *
+ * @param key Tree key to fill. Can't be NULL.
+ * @param ref Reference value to read. Can't be NULL.
+ * @param size Field size in bytes: 1, 2, 4, or 16.
+ * @return 0 on success, negative errno on error.
+ */
+static int _bf_tree_key_read(struct bf_tree_key *key, const void *ref,
+                             unsigned int size)
+{
+    switch (size) {
+    case 1:
+        key->k0 = *(const uint8_t *)ref;
+        break;
+    case 2:
+        key->k0 = *(const uint16_t *)ref;
+        break;
+    case 4:
+        key->k0 = *(const uint32_t *)ref;
+        break;
+    case 16:
+        key->k0 = bf_read_u64(ref);
+        key->k1 = bf_read_u64((const uint8_t *)ref + 8);
+        break;
+    default:
+        return bf_err_r(-EINVAL, "unsupported tree comparison size %u", size);
+    }
+
+    return 0;
+}
+
+/**
  * @brief Emit a tree leaf chunk: linear equality tests over a short range.
  *
  * Each value emits the same compare shape as the verdict-run member path
- * in `bf_cmp_value()`: a match jumps to the block's shared verdict pair
- * (pending `BF_FIXUP_TYPE_JMP_VERDICT` fixup), a miss falls through to
- * the next value. 16-byte halves fitting a sign-extended 32-bit immediate
- * compare against it directly; the others load their reference into `r3`
- * with `LD_IMM64` first. The chunk closes with an unconditional
- * `BF_FIXUP_TYPE_JMP_NEXT_RULE` jump: a miss must jump over the shared
- * verdict block, never fall into it.
+ * in `bf_cmp_value()`: a match jumps out through a pending @p hit_type
+ * fixup, a miss falls through to the next value. 16-byte halves fitting a
+ * sign-extended 32-bit immediate compare against it directly; the others
+ * load their reference into `r3` with `LD_IMM64` first. The chunk closes
+ * with an unconditional @p miss_type jump: a miss must jump over whatever
+ * follows the block, never fall into it. Verdict-run trees pass
+ * `BF_FIXUP_TYPE_JMP_VERDICT` / `BF_FIXUP_TYPE_JMP_NEXT_RULE`; inline set
+ * matchers pick the pair from the matcher's polarity.
  *
  * @param program Program to generate bytecode into. Can't be NULL.
  * @param keys Sorted, deduplicated reference values. Can't be NULL.
  * @param low First index of the chunk.
  * @param high Last index of the chunk (inclusive).
  * @param size Field size in bytes: 1, 2, 4, or 16.
+ * @param hit_type Fixup type of the per-value equality jumps.
+ * @param miss_type Fixup type of the chunk-closing jump.
  * @return 0 on success, negative errno on error.
  */
 static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
                                     const struct bf_tree_key *keys, size_t low,
-                                    size_t high, unsigned int size)
+                                    size_t high, unsigned int size,
+                                    enum bf_fixup_type hit_type,
+                                    enum bf_fixup_type miss_type)
 {
     for (size_t i = low; i <= high; ++i) {
         switch (size) {
         case 1:
         case 2:
-            EMIT_FIXUP_JMP_VERDICT(
-                program,
+            EMIT_FIXUP(
+                program, hit_type,
                 BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, (uint32_t)keys[i].k0, 0));
             break;
         case 4:
-            EMIT_FIXUP_JMP_VERDICT(
-                program,
+            EMIT_FIXUP(
+                program, hit_type,
                 BPF_JMP32_IMM(BPF_JEQ, BPF_REG_1, (uint32_t)keys[i].k0, 0));
             break;
         case 16: {
@@ -371,14 +436,14 @@ static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
                 }
 
                 if (hi_imm) {
-                    EMIT_FIXUP_JMP_VERDICT(
-                        program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2,
-                                             (int32_t)(uint32_t)hi_val, 0));
+                    EMIT_FIXUP(program, hit_type,
+                               BPF_JMP_IMM(BPF_JEQ, BPF_REG_2,
+                                           (int32_t)(uint32_t)hi_val, 0));
                 } else {
                     EMIT(program, ld64_hi[0]);
                     EMIT(program, ld64_hi[1]);
-                    EMIT_FIXUP_JMP_VERDICT(
-                        program, BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_3, 0));
+                    EMIT_FIXUP(program, hit_type,
+                               BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_3, 0));
                 }
             }
 
@@ -390,7 +455,7 @@ static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
         }
     }
 
-    EMIT_FIXUP_JMP_NEXT_RULE(program, BPF_JMP_A(0));
+    EMIT_FIXUP(program, miss_type, BPF_JMP_A(0));
 
     return 0;
 }
@@ -420,18 +485,24 @@ static int _bf_tree_emit_leaf_chunk(struct bf_program *program,
  * @param low First index of the range.
  * @param high Last index of the range (inclusive).
  * @param size Field size in bytes: 1, 2, 4, or 16.
+ * @param hit_type Fixup type of the leaves' equality jumps.
+ * @param miss_type Fixup type of the leaf chunks' closing jumps.
  * @return 0 on success, negative errno on error.
  */
 static int _bf_tree_emit_range(struct bf_program *program,
                                const struct bf_tree_key *keys, size_t low,
-                               size_t high, unsigned int size)
+                               size_t high, unsigned int size,
+                               enum bf_fixup_type hit_type,
+                               enum bf_fixup_type miss_type)
 {
     size_t mid = low + ((high - low) / 2);
     bool pivot_on_k1 = false;
     int r;
 
-    if (high - low + 1 <= _BF_TREE_LEAF_MAX)
-        return _bf_tree_emit_leaf_chunk(program, keys, low, high, size);
+    if (high - low + 1 <= _BF_TREE_LEAF_MAX) {
+        return _bf_tree_emit_leaf_chunk(program, keys, low, high, size,
+                                        hit_type, miss_type);
+    }
 
     if (size == 16) {
         while (mid < high && keys[mid + 1].k0 == keys[mid].k0)
@@ -479,16 +550,18 @@ static int _bf_tree_emit_range(struct bf_program *program,
                 BPF_JMP32_IMM(BPF_JGT, BPF_REG_1, (uint32_t)keys[mid].k0, 0));
         }
 
-        r = _bf_tree_emit_range(program, keys, low, mid, size);
+        r = _bf_tree_emit_range(program, keys, low, mid, size, hit_type,
+                                miss_type);
         if (r)
             return r;
 
         /* The jump closes here: a strict-greater packet lands on the
          * right subtree, emitted below. The left subtree never falls
-         * through: its leaf chunks all end with a next-rule jump. */
+         * through: its leaf chunks all end with a miss jump. */
     }
 
-    return _bf_tree_emit_range(program, keys, mid + 1, high, size);
+    return _bf_tree_emit_range(program, keys, mid + 1, high, size, hit_type,
+                               miss_type);
 }
 
 int bf_packet_gen_verdict_run_tree(struct bf_program *program,
@@ -520,26 +593,9 @@ int bf_packet_gen_verdict_run_tree(struct bf_program *program,
         return -ENOMEM;
 
     for (size_t i = 0; i < n; ++i) {
-        const void *ref = bf_matcher_payload(matchers[i]);
-
-        switch (size) {
-        case 1:
-            keys[i].k0 = *(const uint8_t *)ref;
-            break;
-        case 2:
-            keys[i].k0 = *(const uint16_t *)ref;
-            break;
-        case 4:
-            keys[i].k0 = *(const uint32_t *)ref;
-            break;
-        case 16:
-            keys[i].k0 = bf_read_u64(ref);
-            keys[i].k1 = bf_read_u64((const uint8_t *)ref + 8);
-            break;
-        default:
-            return bf_err_r(-EINVAL, "unsupported tree comparison size %u",
-                            size);
-        }
+        r = _bf_tree_key_read(&keys[i], bf_matcher_payload(matchers[i]), size);
+        if (r)
+            return r;
     }
 
     qsort(keys, n, sizeof(*keys), _bf_tree_key_cmp);
@@ -570,7 +626,9 @@ int bf_packet_gen_verdict_run_tree(struct bf_program *program,
         program->field_cache.type = type;
     }
 
-    return _bf_tree_emit_range(program, keys, 0, n_unique - 1, size);
+    return _bf_tree_emit_range(program, keys, 0, n_unique - 1, size,
+                               BF_FIXUP_TYPE_JMP_VERDICT,
+                               BF_FIXUP_TYPE_JMP_NEXT_RULE);
 }
 
 static int _bf_matcher_pkt_generate_net(struct bf_program *program,
@@ -741,6 +799,82 @@ static int _bf_matcher_pkt_generate_ip6_dscp(struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Emit an inline-eligible set matcher as a search tree over the
+ * set's elements.
+ *
+ * Same membership test as the map path, without the `map_lookup_elem`
+ * call, the key stores to the stack, and the bitmask byte load: the key
+ * field is loaded into `r1` (and `r2` for 16-byte fields) from its pinned
+ * header register, then compared against the set's sorted elements with
+ * the balanced-tree shape of `_bf_tree_emit_range()`. The load is safe
+ * behind the rule's protocol guards, which already cover set key
+ * components (see `_bf_program_rule_guard_sig()` in program.c) — the same
+ * guarantee the map path relies on for `bf_stub_stx_payload()`.
+ *
+ * The matcher's polarity picks the fixup pair: a non-negated `in` jumps to
+ * the end of the block on element hit (`BF_FIXUP_TYPE_JMP_MATCH`, resolved
+ * here) and to the next rule on miss; a negated `in` swaps the two. Either
+ * way, every path continuing the rule converges right after the block.
+ *
+ * Inlining the set contents at codegen time is correct because
+ * `bf_chain_update_set()` regenerates every program on any set mutation:
+ * an updated set re-enters codegen and re-decides inline-vs-map, including
+ * crossing the eligibility threshold in either direction.
+ *
+ * @param program Program to generate bytecode into. Can't be NULL.
+ * @param matcher Set matcher to generate bytecode for. Can't be NULL.
+ * @param set Inline-eligible set referenced by the matcher (see
+ *        `bf_set_is_inline_eligible()`). Can't be NULL.
+ * @return 0 on success, negative errno on error.
+ */
+static int _bf_matcher_pkt_generate_set_inline(struct bf_program *program,
+                                               const struct bf_matcher *matcher,
+                                               const struct bf_set *set)
+{
+    _cleanup_free_ struct bf_tree_key *keys = NULL;
+    const struct bf_matcher_meta *meta = bf_matcher_get_meta(set->key[0]);
+    size_t n = bf_hashset_size(&set->elems);
+    enum bf_fixup_type hit_type = BF_FIXUP_TYPE_JMP_MATCH;
+    enum bf_fixup_type miss_type = BF_FIXUP_TYPE_JMP_NEXT_RULE;
+    size_t i = 0;
+    int r;
+
+    /* Hashset elements are unique: sorting is enough, no dedup pass. */
+    keys = calloc(n, sizeof(*keys));
+    if (!keys)
+        return -ENOMEM;
+
+    bf_hashset_foreach (&set->elems, elem) {
+        r = _bf_tree_key_read(&keys[i++], elem->data, meta->hdr_payload_size);
+        if (r)
+            return r;
+    }
+
+    qsort(keys, n, sizeof(*keys), _bf_tree_key_cmp);
+
+    /* No field-cache interaction: a rule carrying a SET matcher is never
+     * run-eligible, so `_bf_program_generate_rule()` already invalidated
+     * the cache at rule entry. */
+    r = _bf_matcher_pkt_load(program, meta, BPF_REG_1);
+    if (r)
+        return r;
+
+    if (bf_matcher_get_negate(matcher)) {
+        hit_type = BF_FIXUP_TYPE_JMP_NEXT_RULE;
+        miss_type = BF_FIXUP_TYPE_JMP_MATCH;
+    }
+
+    r = _bf_tree_emit_range(program, keys, 0, n - 1, meta->hdr_payload_size,
+                            hit_type, miss_type);
+    if (r)
+        return r;
+
+    /* All matching paths converge here, right after the block, where
+     * execution continues with the rest of the rule. */
+    return bf_program_fixup(program, BF_FIXUP_TYPE_JMP_MATCH);
+}
+
 static int _bf_matcher_pkt_generate_set(struct bf_program *program,
                                         const struct bf_matcher *matcher)
 {
@@ -757,6 +891,9 @@ static int _bf_matcher_pkt_generate_set(struct bf_program *program,
                         *(uint32_t *)bf_matcher_payload(matcher),
                         program->runtime.chain->name);
     }
+
+    if (bf_set_is_inline_eligible(set))
+        return _bf_matcher_pkt_generate_set_inline(program, matcher, set);
 
     if (set->use_trie) {
         const struct bf_matcher_meta *meta = bf_matcher_get_meta(set->key[0]);
