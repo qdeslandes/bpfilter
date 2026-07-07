@@ -71,8 +71,10 @@ enum bf_chain_flags
     /** A rule reads the normalized L4 protocol ID (r8). */
     BF_CHAIN_NEEDS_L4_PROTO,
 
-    /** A rule computes the packet's flow hash: the flow-hash ELF stub reads
-     * `l3_hdr` and `l4_hdr` from the runtime context. */
+    /** A rule computes the packet's flow hash through the flow-hash ELF stub
+     * (`meta.flow_probability`), which reads `l3_hdr` and `l4_hdr` from the
+     * runtime context. `meta.flow_hash` does not set this flag: its TC-only
+     * codegen uses `bpf_get_hash_recalc()` and consumes no parsing state. */
     BF_CHAIN_FLOW_HASH,
 
     /** A rule reads the interface index from the runtime context

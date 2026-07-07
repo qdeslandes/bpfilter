@@ -227,6 +227,12 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                 chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR);
                 break;
             case BF_MATCHER_META_FLOW_HASH:
+                /* On TC, the only supported flavor, the matcher reads the
+                 * flow hash through bpf_get_hash_recalc(), which consumes
+                 * only the skb argument: no packet-parsing prologue state is
+                 * needed. An implementation reading headers or r6-r9 must
+                 * set an appropriate flag (see enum bf_chain_flags). */
+                break;
             case BF_MATCHER_META_FLOW_PROBABILITY:
                 chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
                                 BF_FLAG(BF_CHAIN_FLOW_HASH);

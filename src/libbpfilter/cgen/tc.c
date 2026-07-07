@@ -121,6 +121,9 @@ static int _bf_tc_gen_inline_matcher(struct bf_program *program,
         return bf_cmp_value(program, matcher, bf_matcher_payload(matcher), 4,
                             BPF_REG_1);
     case BF_MATCHER_META_FLOW_HASH:
+        /* The chain-flag derivation emits no parsing prologue for this
+         * matcher: the implementation must keep reading only the skb
+         * argument (no headers, no r6-r9, no dynptr). */
         EMIT(program,
              BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
         EMIT(program, BPF_EMIT_CALL(BPF_FUNC_get_hash_recalc));
