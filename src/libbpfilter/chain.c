@@ -234,8 +234,10 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                  * set an appropriate flag (see enum bf_chain_flags). */
                 break;
             case BF_MATCHER_META_FLOW_PROBABILITY:
+                /* The inline flow hash loads from the pinned r6/r9 header
+                 * registers behind guards on r7 and r8. */
                 chain->flags |= BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
-                                BF_FLAG(BF_CHAIN_FLOW_HASH);
+                                BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO);
                 break;
             default:
                 if (meta->layer == BF_MATCHER_LAYER_2 ||

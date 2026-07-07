@@ -31,9 +31,8 @@
  * (`BF_CHAIN_NEEDS_IFINDEX`), or nothing at all.
  *
  * @warning When the parsing pipeline is emitted,
- * @ref bf_stub_parse_l2l3_hdr_direct (or @ref bf_stub_parse_l2l3_hdr for
- * flow-hash chains) will check for the L3 protocol: if it is neither IPv4
- * nor IPv6, every L3 and L4 matcher is skipped.
+ * @ref bf_stub_parse_l2l3_hdr_direct will check for the L3 protocol: if it
+ * is neither IPv4 nor IPv6, every L3 and L4 matcher is skipped.
  *
  * @param program Program to generate the prologue for. Must not be NULL.
  * @return 0 on success, or negative errno value on error.
@@ -63,29 +62,16 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     if (!bf_chain_needs_pkt_parse(program->runtime.chain))
         return 0;
 
-    if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_FLOW_HASH)) {
-        /* The flow-hash ELF stub dereferences bf_runtime.l3_hdr and
-         * bf_runtime.l4_hdr directly: both must remain dynptr slice pointers,
-         * so keep the slice-based parsing. */
-        r = bf_stub_make_ctx_xdp_dynptr(program, BPF_REG_1);
-        if (r)
-            return r;
+    /* The direct-access parsing stub expects the packet bounds in r2
+     * (data) and r3 (data_end). r1 still holds the program's argument. */
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                              offsetof(struct xdp_md, data)));
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
+                              offsetof(struct xdp_md, data_end)));
 
-        r = bf_stub_parse_l2l3_hdr(program, &l4_done);
-        if (r)
-            return r;
-    } else {
-        /* The direct-access parsing stub expects the packet bounds in r2
-         * (data) and r3 (data_end). r1 still holds the program's argument. */
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
-                                  offsetof(struct xdp_md, data)));
-        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
-                                  offsetof(struct xdp_md, data_end)));
-
-        r = bf_stub_parse_l2l3_hdr_direct(program, &l4_done);
-        if (r)
-            return r;
-    }
+    r = bf_stub_parse_l2l3_hdr_direct(program, &l4_done);
+    if (r)
+        return r;
 
     r = bf_stub_parse_l4_hdr(program);
     if (r)

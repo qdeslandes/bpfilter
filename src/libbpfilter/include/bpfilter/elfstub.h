@@ -136,24 +136,6 @@ enum bf_elfstub_id
     BF_ELFSTUB_PKT_LOG,
 
     /**
-     * Calculate flow hash from packet 5-tuple + IPv6 flow label.
-     *
-     * `__u32 bf_flow_hash(struct bf_runtime *ctx, __u16 l3_proto, __u8 l4_proto)`
-     *
-     * Computes a 32-bit hash by combining source/destination addresses,
-     * source/destination ports (TCP/UDP), protocol, and IPv6 flow label,
-     * then applies an xxHash32 avalanche finalizer for uniform distribution.
-     *
-     * **Parameters**
-     * - `ctx`: address of the `bf_runtime` context of the program.
-     * - `l3_proto`: L3 protocol ID (network byte order).
-     * - `l4_proto`: L4 protocol ID.
-     *
-     * **Return** The computed 32-bit flow hash with uniform distribution.
-     */
-    BF_ELFSTUB_FLOW_HASH,
-
-    /**
      * Log socket address metadata to a ring buffer.
      *
      * `__u8 bf_sock_addr_log(struct bf_runtime *ctx, __u32 rule_id, __u32 verdict, __u32 l3_l4_proto, __u8 captured_fields)`

@@ -724,10 +724,9 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
         EMIT(program, BPF_MOV64_REG(BPF_REG_9, BPF_REG_6));
         EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_9, sizeof(struct iphdr)));
 
-        /* l4_hdr is only read by the packet logging and flow-hash ELF stubs:
-         * matchers use the pinned r9 instead. */
-        if (program->runtime.chain->flags &
-            (BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_FLOW_HASH))) {
+        /* l4_hdr is only read by the packet logging ELF stub: matchers use
+         * the pinned r9 instead. */
+        if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {
             EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_9,
                                       BF_PROG_CTX_OFF(l4_hdr)));
         }
@@ -948,9 +947,8 @@ static int _bf_stub_direct_ip4_salvage(struct bf_program *program,
     EMIT(program, BPF_MOV64_REG(BPF_REG_9, BPF_REG_6));
     EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_9, sizeof(struct iphdr)));
 
-    /* l4_hdr is only read by the packet logging ELF stub on this path:
-     * matchers use the pinned r9 instead, and flow-hash chains never use
-     * this stub. */
+    /* l4_hdr is only read by the packet logging ELF stub: matchers use the
+     * pinned r9 instead. */
     if (flags & BF_FLAG(BF_CHAIN_LOG)) {
         EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_9,
                                   BF_PROG_CTX_OFF(l4_hdr)));
@@ -1118,9 +1116,8 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
             EMIT(program,
                  BPF_ALU64_IMM(BPF_ADD, BPF_REG_9, sizeof(struct iphdr)));
 
-            /* l4_hdr is only read by the packet logging ELF stub on this
-             * path: matchers use the pinned r9 instead, and flow-hash chains
-             * never use this stub. */
+            /* l4_hdr is only read by the packet logging ELF stub: matchers
+             * use the pinned r9 instead. */
             if (flags & BF_FLAG(BF_CHAIN_LOG)) {
                 EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_9,
                                           BF_PROG_CTX_OFF(l4_hdr)));
@@ -1282,9 +1279,8 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
             EMIT(program,
                  BPF_ALU64_IMM(BPF_ADD, BPF_REG_9, sizeof(struct ipv6hdr)));
 
-            /* l4_hdr is only read by the packet logging ELF stub on this
-             * path: matchers use the pinned r9 instead, and flow-hash chains
-             * never use this stub. */
+            /* l4_hdr is only read by the packet logging ELF stub: matchers
+             * use the pinned r9 instead. */
             if (flags & BF_FLAG(BF_CHAIN_LOG)) {
                 EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_9,
                                           BF_PROG_CTX_OFF(l4_hdr)));
@@ -1488,9 +1484,9 @@ int bf_stub_parse_l4_hdr(struct bf_program *program)
         EMIT(program, BPF_EXIT_INSN());
     }
 
-    /* l4_hdr is only read by the packet logging and flow-hash ELF stubs:
-     * matchers use the pinned r9 instead. */
-    if (flags & (BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_FLOW_HASH))) {
+    /* l4_hdr is only read by the packet logging ELF stub: matchers use the
+     * pinned r9 instead. */
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
         EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0,
                                   BF_PROG_CTX_OFF(l4_hdr)));
     }

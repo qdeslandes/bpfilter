@@ -115,7 +115,6 @@ bf_target_add_elfstubs(libbpfilter
         "parse_ipv6_nh"
         "update_counters"
         "pkt_log"
-        "flow_hash"
         "sock_addr_log"
 )
 

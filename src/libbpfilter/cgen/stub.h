@@ -167,11 +167,6 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
  * after the @ref bf_stub_parse_l4_hdr call, with no instruction emitted in
  * between.
  *
- * @warning This stub must not be used when the chain computes flow hashes
- * ( @c BF_CHAIN_FLOW_HASH ): the flow-hash ELF stub dereferences
- * `bf_runtime.l3_hdr` and `bf_runtime.l4_hdr` directly, so both must remain
- * dynptr slice pointers, not spilled packet pointers.
- *
  * @param program Program to emit instructions into. Can't be NULL.
  * @param l4_done Jump context over the dedicated L4 slice request,
  *        initialized by this function and closed by the caller. Can't be
@@ -191,10 +186,9 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
  *
  * The header address is pinned in @c r9 for the program's lifetime: @c r9 is
  * callee-saved, so it survives every helper, kfunc, and ELF stub call on the
- * match path. The address is also stored in `bf_runtime.l4_hdr` when the
- * packet logging or flow-hash ELF stubs consume it ( @c BF_CHAIN_LOG or
- * @c BF_CHAIN_FLOW_HASH ), and the header size in `bf_runtime.l4_size` under
- * @c BF_CHAIN_LOG only.
+ * match path. The address is also stored in `bf_runtime.l4_hdr`, and the
+ * header size in `bf_runtime.l4_size`, when the packet logging ELF stub
+ * consumes them ( @c BF_CHAIN_LOG ).
  *
  * If the L4 protocol is not supported, this function returns before requesting
  * a dynamic pointer slice, and the L4 protocol ID register is set to 0. On

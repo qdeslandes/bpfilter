@@ -64,22 +64,15 @@ enum bf_chain_flags
 
     /** A rule reads the L4 header slice: the slice is requested and its
      * address is pinned in r9. The `l4_hdr` and `l4_size` runtime context
-     * fields are only populated under `BF_CHAIN_LOG` (and `BF_CHAIN_FLOW_HASH`
-     * for `l4_hdr`). */
+     * fields are only populated under `BF_CHAIN_LOG`. */
     BF_CHAIN_NEEDS_L4_HDR,
 
     /** A rule reads the normalized L4 protocol ID (r8). */
     BF_CHAIN_NEEDS_L4_PROTO,
 
-    /** A rule computes the packet's flow hash through the flow-hash ELF stub
-     * (`meta.flow_probability`), which reads `l3_hdr` and `l4_hdr` from the
-     * runtime context. `meta.flow_hash` does not set this flag: its TC-only
-     * codegen uses `bpf_get_hash_recalc()` and consumes no parsing state. */
-    BF_CHAIN_FLOW_HASH,
-
     /** A rule reads the interface index from the runtime context
-     * (`meta.iface`). This flag uses the last free bit of `bf_chain.flags`:
-     * adding another flag requires widening the field and its pack format. */
+     * (`meta.iface`). `bf_chain.flags` has a single free bit left: adding
+     * more than one flag requires widening the field and its pack format. */
     BF_CHAIN_NEEDS_IFINDEX,
 
     _BF_CHAIN_FLAGS_MAX,
@@ -116,7 +109,7 @@ static inline bool bf_chain_needs_pkt_parse(const struct bf_chain *chain)
     return chain->flags &
            (BF_FLAG(BF_CHAIN_LOG) | BF_FLAG(BF_CHAIN_STORE_NEXTHDR) |
             BF_FLAG(BF_CHAIN_NEEDS_L3) | BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
-            BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO) | BF_FLAG(BF_CHAIN_FLOW_HASH));
+            BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO));
 }
 
 /**

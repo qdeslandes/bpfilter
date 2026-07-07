@@ -181,9 +181,8 @@ struct bf_runtime
     void *l3_hdr;
 
     /** Pointer to the L4 protocol header (in a dynamic pointer slice). Only
-     * written under `BF_CHAIN_LOG` or `BF_CHAIN_FLOW_HASH`: the packet
-     * logging and flow-hash ELF stubs are its only consumers. New readers
-     * must extend the flag gating in cgen/stub.c. */
+     * written under `BF_CHAIN_LOG`: the packet logging ELF stub is its only
+     * consumer. New readers must extend the flag gating in cgen/stub.c. */
     void *l4_hdr;
 
     /** Layer 2 header. */
