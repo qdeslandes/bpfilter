@@ -227,11 +227,28 @@ int bf_stub_rule_check_protocol(struct bf_program *program,
                                 const struct bf_matcher_meta *meta);
 
 /**
+ * @brief Emit the dual TCP/UDP protocol guard.
+ *
+ * Counterpart of @ref bf_stub_rule_check_protocol for matchers whose field
+ * lives at the same offset in the TCP and UDP headers
+ * (`bf_matcher_meta.l4_dual`): the guard passes when @c r8 holds
+ * `IPPROTO_TCP` or `IPPROTO_UDP`, and misses to the end of the current guard
+ * group otherwise. Past the guard, @c r9 is pinned to the L4 header, exactly
+ * as behind a specific L4 guard.
+ *
+ * @param program Program to emit the instructions into. Can't be NULL.
+ * @return 0 on success, or negative error value on error.
+ */
+int bf_stub_rule_check_l4_dual(struct bf_program *program);
+
+/**
  * @brief Return the register holding the pinned header address for a layer.
  *
  * The prologue parse stubs pin the L3 header address in `R6` and the L4
  * header address in `R9` for the program's lifetime, so matchers read header
- * fields directly from these registers. This function emits no instruction.
+ * fields directly from these registers. Dual TCP/UDP metas
+ * (`bf_matcher_meta.l4_dual`) read from `R9` regardless of their layer. This
+ * function emits no instruction.
  *
  * @param meta Metadata for the matcher type to apply. Defines the layer to
  *        return the header register for. Can't be NULL.

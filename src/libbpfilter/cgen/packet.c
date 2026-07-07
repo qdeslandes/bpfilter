@@ -37,11 +37,15 @@
  *
  * 1. Protocol check: `_bf_program_generate_rule()` (in program.c)
  *    emits deduplicated protocol guards before the matcher loop,
- *    so each L3/L4 protocol is verified at most once per rule. Guards
- *    are further deduplicated across rules: consecutive rules with the
- *    same guard signature form a guard group where only the first rule
- *    emits the guards (`r7`/`r8` are invariant after the prologue), and
- *    a guard miss jumps past the whole group.
+ *    so each L3/L4 protocol is verified at most once per rule. The meta
+ *    port matchers, whose field lives at the same offset in the TCP and
+ *    UDP headers, guard on the dual condition `r8 == IPPROTO_TCP ||
+ *    r8 == IPPROTO_UDP` instead of a single protocol; a specific L4
+ *    guard subsumes the dual condition within a rule. Guards are further
+ *    deduplicated across rules: consecutive rules with the same guard
+ *    signature form a guard group where only the first rule emits the
+ *    guards (`r7`/`r8` are invariant after the prologue), and a guard
+ *    miss jumps past the whole group.
  *
  * 2. Field load:  the prologue parse stubs pin the L3 header address in
  *    `R6` and the L4 header address in `R9` for the program's lifetime,
@@ -55,7 +59,10 @@
  *    2-byte load from the pinned `R9` L4 register like the ICMP
  *    matchers, so their EQ path goes through the same cache-aware load
  *    below; only their RANGE path keeps a private load, as it mutates
- *    `R1` with a byte swap before the compare.
+ *    `R1` with a byte swap before the compare. The meta port matchers
+ *    share this exact shape: TCP and UDP store their ports at the same
+ *    header offsets (asserted in cgen/stub.c), so behind the dual
+ *    protocol guard the field is the same 2-byte load from `R9`.
  *
  *    `_bf_matcher_pkt_load_and_cmp()` skips the load entirely when
  *    `bf_program.field_cache` records that the previous rule left the
@@ -202,8 +209,8 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
      * unmodified (the 16-byte compare uses immediate compares or loads
      * its reference into `r3`, the smaller compares use immediates). The
      * `negate` flag only flips the jump opcode, so negated matchers
-     * remain cacheable. The TCP/UDP port matchers qualify for EQ only:
-     * the `op != BF_MATCHER_EQ` check above keeps their RANGE path
+     * remain cacheable. The TCP/UDP and meta port matchers qualify for EQ
+     * only: the `op != BF_MATCHER_EQ` check above keeps their RANGE path
      * (which mutates `r1` with a `BPF_BSWAP` before `bf_cmp_range()`)
      * and IN out of the cache. */
     switch (bf_matcher_get_type(matcher)) {
@@ -220,6 +227,8 @@ bool bf_packet_matcher_is_cacheable(const struct bf_matcher *matcher)
     case BF_MATCHER_TCP_DPORT:
     case BF_MATCHER_UDP_SPORT:
     case BF_MATCHER_UDP_DPORT:
+    case BF_MATCHER_META_SPORT:
+    case BF_MATCHER_META_DPORT:
         return true;
     default:
         return false;
@@ -803,8 +812,6 @@ int bf_packet_gen_inline_matcher(struct bf_program *program,
     case BF_MATCHER_META_L3_PROTO:
     case BF_MATCHER_META_L4_PROTO:
     case BF_MATCHER_META_PROBABILITY:
-    case BF_MATCHER_META_SPORT:
-    case BF_MATCHER_META_DPORT:
     case BF_MATCHER_META_FLOW_PROBABILITY:
         return bf_matcher_generate_meta(program, matcher);
     case BF_MATCHER_META_MARK:
@@ -833,6 +840,8 @@ int bf_packet_gen_inline_matcher(struct bf_program *program,
     case BF_MATCHER_TCP_DPORT:
     case BF_MATCHER_UDP_SPORT:
     case BF_MATCHER_UDP_DPORT:
+    case BF_MATCHER_META_SPORT:
+    case BF_MATCHER_META_DPORT:
         return _bf_matcher_pkt_generate_port(program, matcher, meta);
     case BF_MATCHER_TCP_FLAGS:
         return _bf_matcher_pkt_generate_tcp_flags(program, matcher, meta);

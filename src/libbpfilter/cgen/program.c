@@ -479,6 +479,12 @@ static int _bf_program_fixup(struct bf_program *program,
     return 0;
 }
 
+/* Pseudo-layer bit tracking the dual TCP/UDP guard in `checked_layers`: the
+ * dual condition is recorded separately from the specific L4 guard, so a
+ * specific guard subsumes (and suppresses) a later dual guard, while a dual
+ * guard followed by a specific L4 matcher still emits the specific guard. */
+#define _BF_CHECKED_L4_DUAL BF_FLAG(_BF_MATCHER_LAYER_MAX)
+
 static int _bf_program_check_proto(struct bf_program *program,
                                    enum bf_matcher_type type,
                                    uint32_t *checked_layers)
@@ -491,6 +497,26 @@ static int _bf_program_check_proto(struct bf_program *program,
     meta = bf_matcher_get_meta(type);
     if (!meta)
         return bf_err_r(-EINVAL, "missing meta for matcher type %d", type);
+
+    /* Dual TCP/UDP metas guard on r8 holding either protocol, unless a
+     * specific L4 guard (which subsumes the dual condition) or a previous
+     * dual guard is already established. cgroup_sock_addr programs keep
+     * their own self-contained codegen: r8 holds the socket's user port
+     * there, not an IPPROTO. */
+    if (meta->l4_dual && program->flavor != BF_FLAVOR_CGROUP_SOCK_ADDR) {
+        int r;
+
+        if (*checked_layers &
+            (BF_FLAG(BF_MATCHER_LAYER_4) | _BF_CHECKED_L4_DUAL))
+            return 0;
+
+        r = bf_stub_rule_check_l4_dual(program);
+        if (r)
+            return r;
+        *checked_layers |= _BF_CHECKED_L4_DUAL;
+
+        return 0;
+    }
 
     if (*checked_layers & BF_FLAG(meta->layer))
         return 0;
@@ -512,8 +538,9 @@ static int _bf_program_check_proto(struct bf_program *program,
  *
  * Mirrors the protocol conditions `_bf_program_check_proto()` would emit
  * for the rule: for each of layers 3 and 4, whether a guard is emitted and
- * the protocol ID it tests. Rules with equal signatures establish the same
- * r7/r8 conditions, so consecutive ones share a guard group.
+ * the protocol ID it tests, plus whether the dual TCP/UDP guard is emitted.
+ * Rules with equal signatures establish the same r7/r8 conditions, so
+ * consecutive ones share a guard group.
  */
 struct bf_guard_sig
 {
@@ -525,6 +552,9 @@ struct bf_guard_sig
     bool has_l4;
     /** L4 protocol guarded on (`bf_matcher_meta.hdr_id`). */
     uint8_t l4_proto;
+    /** The rule guards on the dual TCP/UDP condition
+     * (`bf_matcher_meta.l4_dual`), not subsumed by a specific L4 guard. */
+    bool has_l4_dual;
 };
 
 /**
@@ -533,22 +563,34 @@ struct bf_guard_sig
  * Only the first matcher requiring a given layer contributes to the
  * signature, mirroring the `checked_layers` dedup in
  * `_bf_program_generate_rule()`: later matchers on an already-recorded
- * layer never emit a guard.
+ * layer never emit a guard. A dual TCP/UDP meta contributes only when no
+ * specific L4 guard is recorded yet, mirroring the emission-time
+ * subsumption in `_bf_program_check_proto()`: both walk the matcher list
+ * in the same order, so signature and emission stay consistent.
  *
+ * @param program Program the rule belongs to. Can't be NULL.
  * @param sig Signature to update. Can't be NULL.
  * @param type Matcher type to fold in.
  * @return 0 on success, or a negative errno value on failure.
  */
-static int _bf_guard_sig_add(struct bf_guard_sig *sig,
+static int _bf_guard_sig_add(const struct bf_program *program,
+                             struct bf_guard_sig *sig,
                              enum bf_matcher_type type)
 {
     const struct bf_matcher_meta *meta;
 
+    assert(program);
     assert(sig);
 
     meta = bf_matcher_get_meta(type);
     if (!meta)
         return bf_err_r(-EINVAL, "missing meta for matcher type %d", type);
+
+    if (meta->l4_dual && program->flavor != BF_FLAVOR_CGROUP_SOCK_ADDR) {
+        if (!sig->has_l4)
+            sig->has_l4_dual = true;
+        return 0;
+    }
 
     switch (meta->layer) {
     case BF_MATCHER_LAYER_3:
@@ -606,12 +648,12 @@ static int _bf_program_rule_guard_sig(const struct bf_program *program,
             }
 
             for (size_t i = 0; i < set->n_comps; ++i) {
-                r = _bf_guard_sig_add(sig, set->key[i]);
+                r = _bf_guard_sig_add(program, sig, set->key[i]);
                 if (r)
                     return r;
             }
         } else {
-            r = _bf_guard_sig_add(sig, bf_matcher_get_type(matcher));
+            r = _bf_guard_sig_add(program, sig, bf_matcher_get_type(matcher));
             if (r)
                 return r;
         }
@@ -625,9 +667,14 @@ static int _bf_program_rule_guard_sig(const struct bf_program *program,
  *
  * Protocol guard stage: consecutive rules with the same guard signature
  * share a guard group. Only the first rule of the group emits the r7/r8
- * protocol guards (through `bf_stub_rule_check_protocol()`), and a guard
- * miss jumps past the whole group: the pending
- * `BF_FIXUP_TYPE_JMP_GUARD_MISS` fixups resolve when the group closes.
+ * protocol guards (through `bf_stub_rule_check_protocol()`, or
+ * `bf_stub_rule_check_l4_dual()` for the dual TCP/UDP condition of the
+ * meta port matchers), and a guard miss jumps past the whole group: the
+ * pending `BF_FIXUP_TYPE_JMP_GUARD_MISS` fixups resolve when the group
+ * closes. A specific L4 guard subsumes the dual condition: within a rule,
+ * it suppresses a later dual guard (while a dual guard doesn't suppress a
+ * later specific guard), and across rules, the `has_l4_dual` signature
+ * field keeps single-protocol rules from joining dual-guarded groups.
  * In-group rules are entered only from the previous rule's matcher-miss
  * paths, all of which are post-guard, so their protocol conditions are
  * already established. The group is force-closed before the accumulated
@@ -655,6 +702,7 @@ static int _bf_program_emit_rule_guards(struct bf_program *program,
         program->guard_group.l3_proto == sig.l3_proto &&
         program->guard_group.has_l4 == sig.has_l4 &&
         program->guard_group.l4_proto == sig.l4_proto &&
+        program->guard_group.has_l4_dual == sig.has_l4_dual &&
         program->img.size - program->guard_group.start_insn < SHRT_MAX / 2)
         return 0;
 
@@ -667,6 +715,7 @@ static int _bf_program_emit_rule_guards(struct bf_program *program,
     program->guard_group.l3_proto = sig.l3_proto;
     program->guard_group.has_l4 = sig.has_l4;
     program->guard_group.l4_proto = sig.l4_proto;
+    program->guard_group.has_l4_dual = sig.has_l4_dual;
     program->guard_group.start_insn = program->img.size;
 
     bf_list_foreach (&rule->matchers, matcher_node) {

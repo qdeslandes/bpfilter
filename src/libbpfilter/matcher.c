@@ -850,6 +850,9 @@ static struct bf_matcher_meta _bf_matcher_metas[_BF_MATCHER_TYPE_MAX] = {
     [BF_MATCHER_META_SPORT] =
         {
             .layer = BF_MATCHER_NO_LAYER,
+            .hdr_payload_size = sizeof(uint16_t),
+            .hdr_payload_offset = offsetof(struct tcphdr, source),
+            .l4_dual = true,
             .unsupported_hooks = BF_FLAGS(_BF_HOOKS_CGROUP_SOCK_ADDR_ALL),
             .ops =
                 {
@@ -863,6 +866,9 @@ static struct bf_matcher_meta _bf_matcher_metas[_BF_MATCHER_TYPE_MAX] = {
     [BF_MATCHER_META_DPORT] =
         {
             .layer = BF_MATCHER_NO_LAYER,
+            .hdr_payload_size = sizeof(uint16_t),
+            .hdr_payload_offset = offsetof(struct tcphdr, dest),
+            .l4_dual = true,
             .ops =
                 {
                     BF_MATCHER_OPS(BF_MATCHER_EQ, sizeof(uint16_t),

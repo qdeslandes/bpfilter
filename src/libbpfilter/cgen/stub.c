@@ -58,6 +58,16 @@ static_assert(sizeof(struct udphdr) <= sizeof(struct tcphdr) &&
                   sizeof(struct icmp6hdr) <= sizeof(struct tcphdr),
               "TCP must have the largest supported fixed L4 header");
 
+/* The meta.sport and meta.dport matchers read their field from the pinned r9
+ * at the tcphdr offsets recorded in their `bf_matcher_meta`, under the dual
+ * TCP/UDP guard of bf_stub_rule_check_l4_dual(): this is only sound while
+ * both headers store their port fields at the same offsets. */
+static_assert(offsetof(struct tcphdr, source) ==
+                      offsetof(struct udphdr, source) &&
+                  offsetof(struct tcphdr, dest) ==
+                      offsetof(struct udphdr, dest),
+              "TCP and UDP headers must share their port field offsets");
+
 /**
  * Generate stub to create a dynptr.
  *
@@ -1196,9 +1206,27 @@ int bf_stub_rule_check_protocol(struct bf_program *program,
     return 0;
 }
 
+int bf_stub_rule_check_l4_dual(struct bf_program *program)
+{
+    assert(program);
+
+    /* r8 is normalized by the prologue (0 for unsupported protocols), and r9
+     * is pinned whenever r8 holds a supported L4 protocol: past these two
+     * jumps, reading the L4 header from r9 is sound, exactly as behind a
+     * specific L4 guard. */
+    EMIT(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, IPPROTO_TCP, 1));
+    EMIT_FIXUP_JMP_GUARD_MISS(program,
+                              BPF_JMP_IMM(BPF_JNE, BPF_REG_8, IPPROTO_UDP, 0));
+
+    return 0;
+}
+
 int bf_stub_hdr_reg(const struct bf_matcher_meta *meta)
 {
     assert(meta);
+
+    if (meta->l4_dual)
+        return BPF_REG_9;
 
     switch (meta->layer) {
     case BF_MATCHER_LAYER_3:

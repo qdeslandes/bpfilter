@@ -295,6 +295,10 @@ struct bf_program
         bool has_l4;
         /** L4 protocol guarded on (`bf_matcher_meta.hdr_id`). */
         uint8_t l4_proto;
+        /** The group's rules guard on the dual TCP/UDP condition
+         * (`bf_matcher_meta.l4_dual`), not subsumed by a specific L4
+         * guard. */
+        bool has_l4_dual;
         /** `img.size` when the group's guards were emitted, used to
          * force-close the group before the accumulated guard-miss jump
          * offset can overflow the 16-bit displacement. */

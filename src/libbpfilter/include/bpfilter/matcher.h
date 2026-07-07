@@ -236,6 +236,11 @@ struct bf_matcher_meta
     /** Offset of the payload in the packet header. */
     size_t hdr_payload_offset;
 
+    /** The field lives at the same offset in the TCP and UDP headers: the
+     * protocol guard is `r8 == IPPROTO_TCP || r8 == IPPROTO_UDP` and the
+     * header register is `r9`. */
+    bool l4_dual;
+
     /** Bitmask of unsupported hooks for this matcher. */
     uint32_t unsupported_hooks;
 
