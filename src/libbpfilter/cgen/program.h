@@ -46,7 +46,9 @@
  * - @c r0 : return value
  * - @c r1 to @c r5 (included): general purpose registers
  * - @c r6 : L3 header address, pinned by the prologue for the program's
- *   lifetime (ctx address for `cgroup_sock_addr` programs)
+ *   lifetime (ctx address for `cgroup_sock_addr` programs, flavor context
+ *   address on no-parse packet-flavor chains, see
+ *   @ref bf_program_ctx_in_r6 )
  * - @c r7 : L3 protocol ID
  * - @c r8 : L4 protocol ID
  * - @c r9 : L4 header address, pinned by the prologue for the program's
@@ -343,6 +345,31 @@ struct bf_program
 };
 
 #define _free_bf_program_ __attribute__((__cleanup__(bf_program_free)))
+
+/**
+ * @brief Check whether the flavor context pointer is pinned in r6.
+ *
+ * On packet-flavor chains that don't consume packet-header state (see
+ * @ref bf_chain_needs_pkt_parse ), the parsing pipeline is skipped and r6
+ * has no other writer or reader: the prologue pins the flavor's context
+ * pointer there (the skb for `BF_FLAVOR_NF`, hoisting the per-consumer BTF
+ * chase) instead of storing the program's argument to `bf_runtime.arg`,
+ * and every consumer (packet-size derivation, mark accessors, TC
+ * `meta.flow_hash`) reads the context from r6. r6 is callee-saved, so the
+ * pin survives every helper and ELF stub call reachable on these chains.
+ * `cgroup_sock_addr` programs keep their own unconditional r6 = ctx scheme
+ * and are excluded.
+ *
+ * @param program Program to check. Can't be NULL.
+ * @return True if the flavor context is pinned in r6.
+ */
+static inline bool bf_program_ctx_in_r6(const struct bf_program *program)
+{
+    assert(program);
+
+    return program->flavor != BF_FLAVOR_CGROUP_SOCK_ADDR &&
+           !bf_chain_needs_pkt_parse(program->runtime.chain);
+}
 
 /**
  * @brief Allocate and initialize a new `bf_program` object.

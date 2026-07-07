@@ -1427,13 +1427,18 @@ int bf_program_generate(struct bf_program *program)
     if (r)
         return bf_err_r(r, "failed to build set groups");
 
-    // Save the program's argument into the context.
-    EMIT(program,
-         BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
+    /* Save the program's argument into the context and reset the protocol
+     * ID registers. Skipped when the flavor context is pinned in r6 (see
+     * bf_program_ctx_in_r6()): the flavor ops read the context from r6
+     * there, the remaining bf_runtime.arg readers are all parse-or-log-only
+     * paths, and every r7/r8 reader implies a parse chain. */
+    if (!bf_program_ctx_in_r6(program)) {
+        EMIT(program,
+             BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, BF_PROG_CTX_OFF(arg)));
 
-    // Reset the protocol ID registers
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
-    EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_7, 0));
+        EMIT(program, BPF_MOV64_IMM(BPF_REG_8, 0));
+    }
 
     // If at least one rule logs the matched packets, populate ctx->log_map
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_LOG)) {

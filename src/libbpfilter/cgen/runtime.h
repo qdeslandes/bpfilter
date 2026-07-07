@@ -121,7 +121,12 @@ struct bf_runtime
      * - `BF_FLAVOR_TC`: `struct struct __sk_buff *`
      * - `BF_FLAVOR_CGROUP_SKB`: `struct __sk_buff *`
      * - `BF_FLAVOR_NF`: `struct bpf_nf_ctx *`
-     * - `BF_FLAVOR_CGROUP_SOCK_ADDR`: `struct bpf_sock_addr *` */
+     * - `BF_FLAVOR_CGROUP_SOCK_ADDR`: `struct bpf_sock_addr *`
+     *
+     * Only written when the chain consumes packet-header state
+     * (`bf_chain_needs_pkt_parse()`) or on `BF_FLAVOR_CGROUP_SOCK_ADDR`:
+     * no-parse packet flavors keep the flavor context pinned in r6 instead
+     * (the skb for `BF_FLAVOR_NF`), see `bf_program_ctx_in_r6()`. */
     void *arg;
 
     /** BPF dynamic pointer to access the packet data. Dynamic pointers are

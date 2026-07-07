@@ -36,6 +36,12 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
+    /* Pin the __sk_buff context in r6: on no-parse chains, every consumer
+     * reads it from there instead of bf_runtime.arg, which is never
+     * written. r1 is left untouched for the ifindex store below. */
+    if (bf_program_ctx_in_r6(program))
+        EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_1));
+
     /** The @c __sk_buff structure contains two fields related to the interface
      * index: @c ingress_ifindex and @c ifindex . @c ingress_ifindex is the
      * interface index the packet has been received on. However, we use
@@ -53,8 +59,9 @@ static int _bf_cgroup_skb_gen_inline_prologue(struct bf_program *program)
     }
 
     /* No rule consumes packet-header state: skip the L3 protocol derivation
-     * and the parsing pipeline entirely. r7 and r8 keep their prologue-reset
-     * value of 0, r6 and r9 stay unwritten as no matcher can read them. */
+     * and the parsing pipeline entirely. r6 holds the flavor context,
+     * pinned above; r7, r8, and r9 stay unwritten as nothing on this chain
+     * reads them. */
     if (!bf_chain_needs_pkt_parse(program->runtime.chain))
         return 0;
 
@@ -117,6 +124,16 @@ static int _bf_cgroup_skb_gen_inline_get_pkt_size(struct bf_program *program)
 {
     assert(program);
 
+    /* The __sk_buff context is pinned in r6 on no-parse chains: read the
+     * packet length from there, skipping the bf_runtime.arg reload. */
+    if (bf_program_ctx_in_r6(program)) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  offsetof(struct __sk_buff, len)));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, ETH_HLEN));
+
+        return 0;
+    }
+
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
     EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_1,
@@ -136,8 +153,14 @@ static int _bf_cgroup_skb_gen_inline_epilogue(struct bf_program *program)
 static int _bf_cgroup_skb_gen_inline_set_mark(struct bf_program *program,
                                               uint32_t mark)
 {
-    EMIT(program,
-         BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+    /* The __sk_buff context is pinned in r6 on no-parse chains, sparing
+     * the bf_runtime.arg reload. */
+    if (bf_program_ctx_in_r6(program)) {
+        EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_6));
+    } else {
+        EMIT(program,
+             BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+    }
     EMIT(program, BPF_MOV64_IMM(BPF_REG_2, mark));
     EMIT(program, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_2,
                               offsetof(struct __sk_buff, mark)));
@@ -153,8 +176,14 @@ static int _bf_cgroup_skb_gen_inline_matcher(struct bf_program *program,
 
     switch (bf_matcher_get_type(matcher)) {
     case BF_MATCHER_META_MARK:
-        EMIT(program,
-             BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+        /* The __sk_buff context is pinned in r6 on no-parse chains,
+         * sparing the bf_runtime.arg reload. */
+        if (bf_program_ctx_in_r6(program)) {
+            EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_6));
+        } else {
+            EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10,
+                                      BF_PROG_CTX_OFF(arg)));
+        }
         EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_1,
                                   offsetof(struct __sk_buff, mark)));
 

@@ -55,6 +55,17 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     needs_ifindex =
         program->runtime.chain->flags & BF_FLAG(BF_CHAIN_NEEDS_IFINDEX);
 
+    /* Pin the skb in r6: on no-parse chains, every consumer reads it from
+     * there instead of chasing it from bf_runtime.arg, which is never
+     * written. Pinning the skb rather than the bpf_nf_ctx hoists the
+     * per-consumer BTF chase into the prologue. r1 is left untouched for
+     * the ifindex chase below. */
+    if (bf_program_ctx_in_r6(program)) {
+        if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, offset));
+    }
+
     /* The nf_hook_state pointer (r2) feeds both the ifindex chase below and
      * the L3 protocol derivation: load it if either consumer is emitted. */
     if (needs_ifindex || needs_parse) {
@@ -113,8 +124,8 @@ static int _bf_nf_gen_inline_prologue(struct bf_program *program)
     }
 
     /* No rule consumes packet-header state: skip the parsing pipeline
-     * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
-     * stay unwritten as no matcher can read them. */
+     * entirely. r6 holds the skb, pinned above; r7, r8, and r9 stay
+     * unwritten as nothing on this chain reads them. */
     if (!needs_parse)
         return 0;
 
@@ -165,6 +176,17 @@ static int _bf_nf_gen_inline_get_pkt_size(struct bf_program *program)
 
     assert(program);
 
+    /* The skb is pinned in r6 on no-parse chains: read the packet length
+     * from there, skipping the bf_runtime.arg reload and the skb chase. */
+    if (bf_program_ctx_in_r6(program)) {
+        if ((offset = bf_btf_get_field_off("sk_buff", "len")) < 0)
+            return offset;
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6, offset));
+        EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, ETH_HLEN));
+
+        return 0;
+    }
+
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
     if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)
@@ -195,6 +217,17 @@ static int _bf_nf_gen_inline_matcher(struct bf_program *program,
 
     switch (bf_matcher_get_type(matcher)) {
     case BF_MATCHER_META_MARK:
+        /* The skb is pinned in r6 on no-parse chains: read the mark from
+         * there, skipping the bf_runtime.arg reload and the skb chase. */
+        if (bf_program_ctx_in_r6(program)) {
+            if ((offset = bf_btf_get_field_off("sk_buff", "mark")) < 0)
+                return offset;
+            EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6, offset));
+
+            return bf_cmp_value(program, matcher, bf_matcher_payload(matcher),
+                                4, BPF_REG_1);
+        }
+
         EMIT(program,
              BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
         if ((offset = bf_btf_get_field_off("bpf_nf_ctx", "skb")) < 0)

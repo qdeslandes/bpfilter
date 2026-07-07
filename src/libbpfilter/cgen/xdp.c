@@ -27,8 +27,9 @@
  *
  * The packet-header parsing pipeline is only emitted if the chain consumes
  * its outputs (see @ref bf_chain_needs_pkt_parse ): otherwise the prologue
- * reduces to the `ifindex` store if a rule filters on it
- * (`BF_CHAIN_NEEDS_IFINDEX`), or nothing at all.
+ * reduces to pinning the `xdp_md` context in r6 (see
+ * @ref bf_program_ctx_in_r6 ), plus the `ifindex` store if a rule filters
+ * on it (`BF_CHAIN_NEEDS_IFINDEX`).
  *
  * @warning When the parsing pipeline is emitted,
  * @ref bf_stub_parse_l2l3_hdr_direct will check for the L3 protocol: if it
@@ -48,6 +49,12 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
 
     assert(program);
 
+    /* Pin the xdp_md context in r6: on no-parse chains, every consumer
+     * reads it from there instead of bf_runtime.arg, which is never
+     * written. r1 is left untouched for the ifindex store below. */
+    if (bf_program_ctx_in_r6(program))
+        EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_1));
+
     // Store the ingress ifindex into the runtime context
     if (program->runtime.chain->flags & BF_FLAG(BF_CHAIN_NEEDS_IFINDEX)) {
         EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
@@ -57,8 +64,8 @@ static int _bf_xdp_gen_inline_prologue(struct bf_program *program)
     }
 
     /* No rule consumes packet-header state: skip the parsing pipeline
-     * entirely. r7 and r8 keep their prologue-reset value of 0, r6 and r9
-     * stay unwritten as no matcher can read them. */
+     * entirely. r6 holds the flavor context, pinned above; r7, r8, and r9
+     * stay unwritten as nothing on this chain reads them. */
     if (!bf_chain_needs_pkt_parse(program->runtime.chain))
         return 0;
 
@@ -100,6 +107,18 @@ static int _bf_xdp_gen_inline_store_pkt_size(struct bf_program *program)
 static int _bf_xdp_gen_inline_get_pkt_size(struct bf_program *program)
 {
     assert(program);
+
+    /* The xdp_md context is pinned in r6 on no-parse chains: read the
+     * packet bounds from there, skipping the bf_runtime.arg reload. */
+    if (bf_program_ctx_in_r6(program)) {
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_6,
+                                  offsetof(struct xdp_md, data)));
+        EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_6,
+                                  offsetof(struct xdp_md, data_end)));
+        EMIT(program, BPF_ALU64_REG(BPF_SUB, BPF_REG_1, BPF_REG_2));
+
+        return 0;
+    }
 
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
