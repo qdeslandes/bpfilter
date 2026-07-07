@@ -132,14 +132,20 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
  * through direct packet access, for XDP programs.
  *
  * Semantics mirror @ref bf_stub_parse_l2l3_hdr , but the combined L2+L3 slice
- * request is replaced with a single pointer bounds check: XDP programs loaded
+ * request is replaced with pointer bounds checks: XDP programs loaded
  * without `BPF_F_XDP_HAS_FRAGS` have the whole packet directly accessible
  * through `xdp_md.data` and `xdp_md.data_end`, so no kfunc call is emitted on
- * the fast path. The dynptr creation becomes lazy: the dynptr is only created
- * on the slow paths that genuinely need it (packets too short for the
- * combined window, IPv4 with options, IPv6 with extension headers, and IPv6
- * packets too short for the direct L4 window), which then converge on the
- * slice-based L3 parsing and the shared L4 derivation.
+ * the fast paths. The bounds checks are two-tiered: the full
+ * ETH_HLEN + BF_L3_SLICE_LEN combined window (sized for the fixed IPv6
+ * header) is checked first, and on its miss an IPv4-only salvage block
+ * re-checks the packet against ETH_HLEN + sizeof(struct iphdr) bytes, plus
+ * the protocol's fixed L4 header when the chain consumes the L4 header
+ * slice, keeping short plain IPv4 packets on direct packet access. The
+ * dynptr creation becomes lazy: the dynptr is only created on the slow paths
+ * that genuinely need it (packets missing both direct-access windows, IPv4
+ * with options, IPv6 with extension headers, and IPv6 packets too short for
+ * the direct L4 window), which then converge on the slice-based L3 parsing
+ * and the shared L4 derivation.
  *
  * On entry, @c r2 must hold `xdp_md.data` and @c r3 `xdp_md.data_end`,
  * converted to packet pointers by the verifier. @c r3 is preserved across the

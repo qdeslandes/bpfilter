@@ -35,11 +35,36 @@
 
 #define _BF_LOW_EH_BITMASK 0x1801800000000801ULL
 
-/* Maximum number of fast-path escapes converging on the slow entry of
+/* bf_stub_parse_l2l3_hdr_direct() checks the packet against a two-tier
+ * direct-access window: the full ETH_HLEN + BF_L3_SLICE_LEN combined window
+ * (sized for the fixed IPv6 header) first, then, on its miss, the IPv4
+ * short-packet salvage with per-protocol L4 bounds, leaving the slice
+ * fallback to packets missing both.
+ *
+ * Maximum number of fast-path escapes converging on the slow entry of
  * bf_stub_parse_l2l3_hdr_direct(): IPv4 with options, the IPv6 low extension
  * header bitmask hit, the three individual >64 extension header checks, and
  * the IPv6 L4 bounds check failure. */
 #define _BF_DIRECT_SLOW_JMPS_MAX 6
+
+/* Maximum number of salvage escapes converging on the slice fallback of
+ * bf_stub_parse_l2l3_hdr_direct(): the fixed IPv4 header bounds check, the
+ * ethertype check, the IHL check, and the per-protocol L4 bounds check. */
+#define _BF_DIRECT_FB_JMPS_MAX 4
+
+/* Maximum number of jumps converging on the l4_done jump of
+ * bf_stub_parse_l2l3_hdr_direct(): the IPv4 and IPv6 unsupported-L4-protocol
+ * escapes, the IPv4 fast-path exit, the IPv6 fast-path jump over the salvage,
+ * and the salvage's unsupported-L4-protocol escape. */
+#define _BF_DIRECT_DONE_JMPS_MAX 5
+
+/* Maximum number of jumps converging on the end of
+ * bf_stub_parse_l2l3_hdr_direct(), reached on both chain variants:
+ * L3-only chains emit the two supported-ethertype checks, the
+ * unsupported-ethertype jump, and the salvage exit; L4-proto-only chains
+ * emit the unsupported-ethertype jump, the IPv4 and IPv6 raw-protocol
+ * exits, and the salvage exit. */
+#define _BF_DIRECT_END_JMPS_MAX 4
 
 /* The IPv4 L4 fast paths in bf_stub_parse_l2l3_hdr() and
  * bf_stub_parse_l2l3_hdr_direct() pin r9 into the combined L2+L3 window
@@ -52,7 +77,8 @@ static_assert(sizeof(struct iphdr) + sizeof(struct tcphdr) <= BF_L3_SLICE_LEN,
 /* The IPv6 L4 fast path in bf_stub_parse_l2l3_hdr_direct() bounds-checks a
  * single sizeof(struct tcphdr) window past the fixed IPv6 header before
  * pinning r9: it is only sound while no supported L4 protocol has a larger
- * fixed header. */
+ * fixed header. The IPv4 short-packet salvage doesn't rely on this
+ * assumption: its L4 bounds are per-protocol by construction. */
 static_assert(sizeof(struct udphdr) <= sizeof(struct tcphdr) &&
                   sizeof(struct icmphdr) <= sizeof(struct tcphdr) &&
                   sizeof(struct icmp6hdr) <= sizeof(struct tcphdr),
@@ -746,15 +772,213 @@ int bf_stub_parse_l2l3_hdr(struct bf_program *program,
     return 0;
 }
 
+/**
+ * @brief Emit the IPv4 short-packet salvage block of
+ *        @ref bf_stub_parse_l2l3_hdr_direct .
+ *
+ * The direct parsing's combined bounds check is sized for the fixed IPv6
+ * header (ETH_HLEN + BF_L3_SLICE_LEN bytes), but a plain IPv4 packet only
+ * needs ETH_HLEN + sizeof(struct iphdr) bytes of direct access, plus its
+ * protocol's fixed L4 header when the chain consumes the L4 header slice.
+ * This block runs on the combined check's miss and re-checks the packet
+ * against these smaller, protocol-aware bounds, keeping short plain IPv4
+ * packets (minimal ICMP messages, empty UDP datagrams) on direct packet
+ * access instead of the slice fallback and its three kfunc calls.
+ *
+ * On entry, @c r2 and @c r3 must still hold `xdp_md.data` and
+ * `xdp_md.data_end` from the stub's entry. Escapes for packets the block
+ * can't salvage (too short for the fixed IPv4 header, non-IPv4 ethertype,
+ * IPv4 options, packet not covering the protocol's fixed L4 header) are
+ * appended to @p fbjmps , which the caller closes on the slice fallback.
+ * Salvaged packets join the main fast paths: through @p endjmps when the
+ * chain doesn't read the L4 header slice, or by falling through toward the
+ * caller's l4_done jump otherwise, with the unsupported-L4-protocol escape
+ * appended to @p donejmps .
+ *
+ * @param program Program to emit instructions into. Can't be NULL.
+ * @param fbjmps Escapes to the slice fallback, appended to by this function
+ *        and closed by the caller. Can't be NULL.
+ * @param n_fb Number of entries in @p fbjmps . Can't be NULL.
+ * @param endjmps Jumps to the end of the stub, appended to by this function
+ *        and closed by the caller. Can't be NULL.
+ * @param n_end Number of entries in @p endjmps . Can't be NULL.
+ * @param donejmps Jumps to the caller's l4_done jump, appended to by this
+ *        function and closed by the caller. Can't be NULL.
+ * @param n_done Number of entries in @p donejmps . Can't be NULL.
+ * @return 0 on success, or negative errno value on error.
+ */
+static int _bf_stub_direct_ip4_salvage(struct bf_program *program,
+                                       struct bf_jmpctx *fbjmps, size_t *n_fb,
+                                       struct bf_jmpctx *endjmps, size_t *n_end,
+                                       struct bf_jmpctx *donejmps,
+                                       size_t *n_done)
+{
+    uint8_t flags;
+    bool needs_l4;
+    int r;
+
+    assert(program);
+    assert(fbjmps);
+    assert(n_fb);
+    assert(endjmps);
+    assert(n_end);
+    assert(donejmps);
+    assert(n_done);
+
+    flags = program->runtime.chain->flags;
+    needs_l4 = flags & (BF_FLAG(BF_CHAIN_NEEDS_L4_HDR) |
+                        BF_FLAG(BF_CHAIN_NEEDS_L4_PROTO));
+
+    /* Packets too short for the ethertype plus a full fixed IPv4 header keep
+     * the slice fallback behavior, r7 left unloaded: the fallback's L2 slice
+     * re-reads the ethertype. r2 and r3 still hold data and data_end from the
+     * stub's entry, as the failed combined bounds check only clobbered r4. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_2));
+    EMIT(program,
+         BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN + sizeof(struct iphdr)));
+    fbjmps[(*n_fb)++] =
+        bf_jmpctx_get(program, BPF_JMP_REG(BPF_JGT, BPF_REG_4, BPF_REG_3, 0));
+
+    // Store the L3 protocol ID in r7
+    EMIT(program, BPF_LDX_MEM(BPF_H, BPF_REG_7, BPF_REG_2,
+                              offsetof(struct ethhdr, h_proto)));
+
+    /* Only IPv4 fits its fixed L3 header below the combined window: an IPv6
+     * packet this short can't hold its fixed header, so it goes through the
+     * slice fallback, whose L3 slice request fails into the
+     * error-counter/accept path. */
+    fbjmps[(*n_fb)++] = bf_jmpctx_get(
+        program, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, htobe16(ETH_P_IP), 0));
+
+    // Pin the L3 header address in r6 for the program's lifetime
+    EMIT(program, BPF_MOV64_REG(BPF_REG_6, BPF_REG_2));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_6, ETH_HLEN));
+
+    /* Same BF_CHAIN_LOG-gated stores as the main fast path. l3_offset stays
+     * unwritten, as only the slow paths read it: they are entered through the
+     * slice fallback, where _bf_stub_parse_l2_ethhdr() stores it. */
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2,
+                                  BF_PROG_CTX_OFF(l2_hdr)));
+        EMIT(program,
+             BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l2_size), ETH_HLEN));
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_6,
+                                  BF_PROG_CTX_OFF(l3_hdr)));
+    }
+
+    if (!needs_l4) {
+        /* No rule consumes L4 state: nothing left to derive, jump to the end
+         * of the stub with r7 holding the supported ethertype, as on the main
+         * fast path. */
+        endjmps[(*n_end)++] = bf_jmpctx_get(program, BPF_JMP_A(0));
+        return 0;
+    }
+
+    // l3_size is only read by the packet logging ELF stub
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_ST_MEM(BPF_B, BPF_REG_10, BF_PROG_CTX_OFF(l3_size),
+                                 sizeof(struct iphdr)));
+    }
+
+    if (!(flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR))) {
+        /* Only the normalized L4 protocol ID is consumed: load the raw
+         * protocol (fixed offset, independent of the IHL) and let the
+         * normalization chain in bf_stub_parse_l4_hdr() run after the stub,
+         * as on the main fast path. */
+        EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
+                                  offsetof(struct iphdr, protocol)));
+        endjmps[(*n_end)++] = bf_jmpctx_get(program, BPF_JMP_A(0));
+        return 0;
+    }
+
+    /* IPv4 options on a packet too short for the combined window go through
+     * the slice fallback: lazy dynptr creation, L3 slice request, shared L4
+     * derivation, and dedicated L4 slice request. */
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_6, 0));
+    fbjmps[(*n_fb)++] = bf_jmpctx_get(
+        program, BPF_JMP_IMM(BPF_JNE, BPF_REG_1, (IPVERSION << 4) | 5, 0));
+
+    EMIT(program, BPF_LDX_MEM(BPF_B, BPF_REG_8, BPF_REG_6,
+                              offsetof(struct iphdr, protocol)));
+
+    /* Same r8 normalization semantics as bf_stub_parse_l4_hdr(): r8 is
+     * untouched for supported L4 protocols, zeroed otherwise, and r9 is only
+     * written behind a supported r8. The swich shape is used regardless of
+     * BF_CHAIN_LOG: the header size it selects into r4 feeds the
+     * per-protocol bounds check below, so the size register is never dead
+     * here and the compare-chain form doesn't apply. */
+    {
+        _clean_bf_swich_ struct bf_swich swich =
+            bf_swich_get(program, BPF_REG_8);
+
+        EMIT_SWICH_OPTION(&swich, IPPROTO_TCP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct tcphdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_UDP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct udphdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMP,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmphdr)));
+        EMIT_SWICH_OPTION(&swich, IPPROTO_ICMPV6,
+                          BPF_MOV64_IMM(BPF_REG_4, sizeof(struct icmp6hdr)));
+        EMIT_SWICH_DEFAULT(&swich, BPF_MOV64_IMM(BPF_REG_8, 0));
+
+        r = bf_swich_generate(&swich);
+        if (r)
+            return r;
+    }
+
+    /* Unsupported L4 protocols skip the bounds check and the r9 pinning,
+     * going through l4_done as on the main fast paths: r9 stays unwritten,
+     * and the per-rule L4 guards on r8 keep the matchers unreachable on this
+     * path. */
+    donejmps[(*n_done)++] =
+        bf_jmpctx_get(program, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 0));
+
+    /* Per-protocol bounds check: the packet only has to cover its own fixed
+     * L4 header past the fixed IPv4 header, not a window sized for the
+     * largest one. Packets failing it (e.g. truncated TCP) reach the slice
+     * fallback, where the dedicated L4 slice request fails into the
+     * error-counter/accept path. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_6));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, sizeof(struct iphdr)));
+    EMIT(program, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_4));
+    fbjmps[(*n_fb)++] =
+        bf_jmpctx_get(program, BPF_JMP_REG(BPF_JGT, BPF_REG_1, BPF_REG_3, 0));
+
+    // l4_size is only read by the packet logging ELF stub
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_B, BPF_REG_10, BPF_REG_4,
+                                  BF_PROG_CTX_OFF(l4_size)));
+    }
+
+    /* Pin the L4 header address in r9 for the program's lifetime: the
+     * per-protocol bounds check above covers the protocol's fixed L4 header
+     * past the fixed IPv4 header. */
+    EMIT(program, BPF_MOV64_REG(BPF_REG_9, BPF_REG_6));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_9, sizeof(struct iphdr)));
+
+    /* l4_hdr is only read by the packet logging ELF stub on this path:
+     * matchers use the pinned r9 instead, and flow-hash chains never use
+     * this stub. */
+    if (flags & BF_FLAG(BF_CHAIN_LOG)) {
+        EMIT(program, BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_9,
+                                  BF_PROG_CTX_OFF(l4_hdr)));
+    }
+
+    // Fall through into the caller's l4_done jump
+    return 0;
+}
+
 int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
                                   struct bf_jmpctx *l4_done)
 {
     _clean_bf_jmpctx_ struct bf_jmpctx l3skip = bf_jmpctx_default();
     struct bf_jmpctx slowjmps[_BF_DIRECT_SLOW_JMPS_MAX] = {};
-    struct bf_jmpctx donejmps[3] = {};
-    struct bf_jmpctx endjmps[3] = {};
+    struct bf_jmpctx fbjmps[_BF_DIRECT_FB_JMPS_MAX] = {};
+    struct bf_jmpctx donejmps[_BF_DIRECT_DONE_JMPS_MAX] = {};
+    struct bf_jmpctx endjmps[_BF_DIRECT_END_JMPS_MAX] = {};
     struct bf_jmpctx shortjmp, tailjmp, ip4jmp, ip6jmp, tcpjmp, udpjmp;
     size_t n_slow = 0;
+    size_t n_fb = 0;
     size_t n_done = 0;
     size_t n_end = 0;
     bool needs_l4;
@@ -772,8 +996,9 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
     /* Combined bounds check, substituting for the combined L2+L3 slice
      * request: past this check, ETH_HLEN + BF_L3_SLICE_LEN bytes are directly
      * accessible from r2, the same window the combined slice provides on the
-     * dynptr path. Packets too short for the window fall back to the
-     * slice-based parsing. */
+     * dynptr path. Packets too short for the window go through the IPv4
+     * short-packet salvage below before falling back to the slice-based
+     * parsing. */
     EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_2));
     EMIT(program,
          BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, ETH_HLEN + BF_L3_SLICE_LEN));
@@ -1073,11 +1298,10 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
                                           BF_PROG_CTX_OFF(l4_hdr)));
             }
 
-            /* Both L4 fast paths fall through or jump into the l4_done jump,
-             * over the dedicated L4 slice request. */
-            for (size_t i = 0; i < n_done; ++i)
-                bf_jmpctx_cleanup(&donejmps[i]);
-            *l4_done = bf_jmpctx_get(program, BPF_JMP_A(0));
+            /* Both combined-window L4 fast paths jump over the IPv4
+             * short-packet salvage below, into the l4_done jump emitted past
+             * it. */
+            donejmps[n_done++] = bf_jmpctx_get(program, BPF_JMP_A(0));
         } else {
             // If no EH matched, nexthdr is L4
             bf_jmpctx_cleanup(&tcpjmp);
@@ -1089,11 +1313,35 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
         }
     }
 
-    /* Short packet fallback: the packet is smaller than
-     * ETH_HLEN + BF_L3_SLICE_LEN bytes. Create the dynptr (skipped on the
-     * fast path) and fall back to separate L2 and L3 slice requests,
-     * preserving the exact semantics of the slice-based parsing. */
+    /* IPv4 short-packet salvage: the combined window is sized for the fixed
+     * IPv6 header, so plain IPv4 packets shorter than
+     * ETH_HLEN + BF_L3_SLICE_LEN bytes fail the combined bounds check even
+     * though ETH_HLEN + sizeof(struct iphdr) bytes (plus the protocol's fixed
+     * L4 header when the chain consumes L4 state) are enough for direct
+     * access. Re-check the packet against these smaller, protocol-aware
+     * bounds before surrendering to the slice fallback below. */
     bf_jmpctx_cleanup(&shortjmp);
+
+    r = _bf_stub_direct_ip4_salvage(program, fbjmps, &n_fb, endjmps, &n_end,
+                                    donejmps, &n_done);
+    if (r)
+        return r;
+
+    if (flags & BF_FLAG(BF_CHAIN_NEEDS_L4_HDR)) {
+        /* All L4 fast paths (combined-window IPv4 and IPv6, salvaged IPv4)
+         * fall through or jump into the l4_done jump, over the dedicated L4
+         * slice request. */
+        for (size_t i = 0; i < n_done; ++i)
+            bf_jmpctx_cleanup(&donejmps[i]);
+        *l4_done = bf_jmpctx_get(program, BPF_JMP_A(0));
+    }
+
+    /* Slice fallback: the packet missed both direct-access windows. Create
+     * the dynptr (skipped on the fast paths) and fall back to separate L2 and
+     * L3 slice requests, preserving the exact semantics of the slice-based
+     * parsing. */
+    for (size_t i = 0; i < n_fb; ++i)
+        bf_jmpctx_cleanup(&fbjmps[i]);
 
     EMIT(program,
          BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
@@ -1109,9 +1357,9 @@ int bf_stub_parse_l2l3_hdr_direct(struct bf_program *program,
         /* Slow entry for the fast-path escapes (IPv4 options, IPv6 extension
          * headers, IPv6 packets too short for the direct L4 window): r7
          * already holds a supported ethertype, this block stores l3_offset
-         * and creates the missing dynptr. The short path above jumps over
-         * both, having gone through _bf_stub_parse_l2_ethhdr() (which stores
-         * l3_offset itself) and the first dynptr creation. */
+         * and creates the missing dynptr. The slice fallback path above jumps
+         * over both, having gone through _bf_stub_parse_l2_ethhdr() (which
+         * stores l3_offset itself) and the first dynptr creation. */
         tailjmp = bf_jmpctx_get(program, BPF_JMP_A(0));
 
         for (size_t i = 0; i < n_slow; ++i)
