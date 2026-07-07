@@ -139,8 +139,9 @@ struct bf_runtime
 
     /** Total size of the packet, or 0 for non-packet flavors. Not written by
      * the prologue: the flavor's `gen_inline_store_pkt_size` op derives and
-     * stores it at the `update_counters` and `pkt_log` ELF stub call sites,
-     * its only consumers. */
+     * stores it on logging paths only, for the `pkt_log` ELF stub, its only
+     * consumer. The `update_counters` ELF stub receives the packet size by
+     * register instead, via the `gen_inline_get_pkt_size` op. */
     __u64 pkt_size;
 
     /** IPv6 extension header mask */

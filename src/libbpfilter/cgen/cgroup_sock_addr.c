@@ -78,8 +78,19 @@ _bf_cgroup_sock_addr_gen_inline_store_pkt_size(struct bf_program *program)
 {
     assert(program);
 
-    // There is no packet, but the counters stub reads `pkt_size`: zero it out.
+    // There is no packet: zero out `pkt_size` for the logging path.
     EMIT(program, BPF_ST_MEM(BPF_DW, BPF_REG_10, BF_PROG_CTX_OFF(pkt_size), 0));
+
+    return 0;
+}
+
+static int
+_bf_cgroup_sock_addr_gen_inline_get_pkt_size(struct bf_program *program)
+{
+    assert(program);
+
+    // There is no packet: pass a zeroed size to the counters stub.
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_1, 0));
 
     return 0;
 }
@@ -538,6 +549,7 @@ static int _bf_cgroup_sock_addr_gen_inline_log(struct bf_program *program,
 const struct bf_flavor_ops bf_flavor_ops_cgroup_sock_addr = {
     .gen_inline_prologue = _bf_cgroup_sock_addr_gen_inline_prologue,
     .gen_inline_store_pkt_size = _bf_cgroup_sock_addr_gen_inline_store_pkt_size,
+    .gen_inline_get_pkt_size = _bf_cgroup_sock_addr_gen_inline_get_pkt_size,
     .gen_inline_epilogue = _bf_cgroup_sock_addr_gen_inline_epilogue,
     .get_verdict = _bf_cgroup_sock_addr_get_verdict,
     .gen_inline_matcher = _bf_cgroup_sock_addr_gen_inline_matcher,

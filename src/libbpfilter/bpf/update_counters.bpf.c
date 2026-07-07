@@ -10,15 +10,13 @@
 #include <bpf/bpf_helpers.h>
 #include <stddef.h>
 
-#include "cgen/runtime.h"
-
 struct bf_counter
 {
     __u64 count;
     __u64 size;
 };
 
-__u8 bf_update_counters(struct bf_runtime *ctx, void *map, __u64 key)
+__u8 bf_update_counters(__u64 pkt_size, void *map, __u64 key)
 {
     struct bf_counter *counter;
 
@@ -29,7 +27,7 @@ __u8 bf_update_counters(struct bf_runtime *ctx, void *map, __u64 key)
     }
 
     counter->count += 1;
-    counter->size += ctx->pkt_size;
+    counter->size += pkt_size;
 
     return 0;
 }

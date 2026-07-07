@@ -108,10 +108,10 @@ enum bf_elfstub_id
     /**
      * Update the counters for a given rule.
      *
-     * `__u8 bf_update_counters(struct bf_runtime *ctx, void *map, __u64 key)`
+     * `__u8 bf_update_counters(__u64 pkt_size, void *map, __u64 key)`
      *
      * **Parameters**
-     * - `ctx`: address of the `bf_runtime` context of the program.
+     * - `pkt_size`: size of the packet, in bytes.
      * - `map`: address of the counters map.
      * - `key`: key of the map to update.
      *

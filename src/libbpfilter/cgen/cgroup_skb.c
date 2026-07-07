@@ -113,6 +113,19 @@ static int _bf_cgroup_skb_gen_inline_store_pkt_size(struct bf_program *program)
     return 0;
 }
 
+static int _bf_cgroup_skb_gen_inline_get_pkt_size(struct bf_program *program)
+{
+    assert(program);
+
+    EMIT(program,
+         BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, BF_PROG_CTX_OFF(arg)));
+    EMIT(program, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_1,
+                              offsetof(struct __sk_buff, len)));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, ETH_HLEN));
+
+    return 0;
+}
+
 static int _bf_cgroup_skb_gen_inline_epilogue(struct bf_program *program)
 {
     (void)program;
@@ -179,6 +192,7 @@ static int _bf_cgroup_skb_get_verdict(enum bf_verdict verdict, int *ret_code)
 const struct bf_flavor_ops bf_flavor_ops_cgroup_skb = {
     .gen_inline_prologue = _bf_cgroup_skb_gen_inline_prologue,
     .gen_inline_store_pkt_size = _bf_cgroup_skb_gen_inline_store_pkt_size,
+    .gen_inline_get_pkt_size = _bf_cgroup_skb_gen_inline_get_pkt_size,
     .gen_inline_epilogue = _bf_cgroup_skb_gen_inline_epilogue,
     .gen_inline_set_mark = _bf_cgroup_skb_gen_inline_set_mark,
     .get_verdict = _bf_cgroup_skb_get_verdict,

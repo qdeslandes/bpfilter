@@ -104,13 +104,29 @@ struct bf_flavor_ops
      *
      * The program argument is reloaded from `bf_runtime.arg`: no live
      * register is assumed, and only @c r1 to @c r3 are clobbered. This op
-     * must be emitted before any `update_counters` or `pkt_log` ELF stub
-     * call, as both stubs read `ctx->pkt_size`.
+     * must be emitted before any `pkt_log` ELF stub call: the logging stubs
+     * are the only readers of `ctx->pkt_size`. Counter updates receive the
+     * packet size by register instead, through @ref gen_inline_get_pkt_size .
      *
      * @param program Program to generate bytecode for. Can't be NULL.
      * @return 0 on success, negative errno on error.
      */
     int (*gen_inline_store_pkt_size)(struct bf_program *program);
+
+    /**
+     * @brief Generate bytecode to derive the packet size into @c r1 .
+     *        Required for all flavors.
+     *
+     * The program argument is reloaded from `bf_runtime.arg`: no live
+     * register is assumed, and only @c r1 and @c r2 are clobbered. This op
+     * leaves the packet size in @c r1 , as the first argument of the
+     * `update_counters` ELF stub: it must be emitted right before the stub's
+     * remaining argument setup ( @c r2 and @c r3 ).
+     *
+     * @param program Program to generate bytecode for. Can't be NULL.
+     * @return 0 on success, negative errno on error.
+     */
+    int (*gen_inline_get_pkt_size)(struct bf_program *program);
 
     int (*gen_inline_epilogue)(struct bf_program *program);
 
