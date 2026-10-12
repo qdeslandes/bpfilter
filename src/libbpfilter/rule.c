@@ -127,6 +127,21 @@ int bf_rule_new_from_pack(struct bf_rule **rule, bf_rpack_node_t node)
             return bf_rpack_key_err(r, "bf_rule.redirect_dir");
     }
 
+    if (bf_rpack_kv_contains(node, "tcp_congestion")) {
+        _cleanup_free_ char *tcp_congestion = NULL;
+
+        r = bf_rpack_kv_str(node, "tcp_congestion", &tcp_congestion);
+        if (r)
+            return bf_rpack_key_err(r, "bf_rule.tcp_congestion");
+
+        // An empty name means the rule doesn't set the algorithm.
+        if (*tcp_congestion) {
+            r = bf_rule_set_tcp_congestion(_rule, tcp_congestion);
+            if (r)
+                return bf_rpack_key_err(r, "bf_rule.tcp_congestion");
+        }
+    }
+
     r = bf_rpack_kv_array(node, "matchers", &m_nodes);
     if (r)
         return bf_rpack_key_err(r, "bf_rule.matchers");
@@ -172,6 +187,7 @@ int bf_rule_pack(const struct bf_rule *rule, bf_wpack_t *pack)
     bf_wpack_kv_int(pack, "verdict", rule->verdict);
     bf_wpack_kv_u32(pack, "redirect_ifindex", rule->redirect_ifindex);
     bf_wpack_kv_int(pack, "redirect_dir", rule->redirect_dir);
+    bf_wpack_kv_str(pack, "tcp_congestion", rule->tcp_congestion);
 
     bf_wpack_kv_list(pack, "matchers", &rule->matchers);
 
@@ -215,6 +231,8 @@ void bf_rule_dump(const struct bf_rule *rule, prefix_t *prefix)
 
     DUMP(prefix, "disabled: %s", rule->disabled ? "yes" : "no");
     DUMP(prefix, "mark: 0x%" PRIx64, rule->mark);
+    DUMP(prefix, "tcp_congestion: %s",
+         bf_rule_has_tcp_congestion(rule) ? rule->tcp_congestion : "<not set>");
     DUMP(prefix, "verdict: %s", bf_verdict_to_str(rule->verdict));
     if (bf_rule_has_redirect(rule)) {
         DUMP(prefix, "redirect_ifindex: %u", rule->redirect_ifindex);
@@ -226,6 +244,27 @@ void bf_rule_dump(const struct bf_rule *rule, prefix_t *prefix)
     }
 
     bf_dump_prefix_pop(prefix);
+}
+
+int bf_rule_set_tcp_congestion(struct bf_rule *rule, const char *name)
+{
+    char tcp_congestion[BF_TCP_CA_NAME_MAX] = {};
+
+    assert(rule);
+    assert(name);
+
+    /* Copy into a zeroed buffer first: the rule is left unchanged on failure,
+     * and the bytes following the name are always zeroed. */
+    if (!*name || bf_strncpy(tcp_congestion, sizeof(tcp_congestion), name)) {
+        return bf_err_r(
+            -EINVAL,
+            "TCP congestion control algorithm name must be 1 to %d characters long",
+            BF_TCP_CA_NAME_MAX - 1);
+    }
+
+    memcpy(rule->tcp_congestion, tcp_congestion, sizeof(tcp_congestion));
+
+    return 0;
 }
 
 int bf_rule_add_matcher(struct bf_rule *rule, enum bf_matcher_type type,

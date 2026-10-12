@@ -672,6 +672,24 @@ static int _bf_program_generate_rule(struct bf_program *program,
         }
     }
 
+    if (bf_rule_has_tcp_congestion(rule)) {
+        if (!program->runtime.ops->gen_inline_set_tcp_congestion) {
+            return bf_err_r(
+                -ENOTSUP,
+                "setting the TCP congestion control algorithm is not supported by %s",
+                bf_hook_to_str(program->runtime.chain->hook));
+        }
+
+        r = program->runtime.ops->gen_inline_set_tcp_congestion(
+            program, rule->tcp_congestion);
+        if (r) {
+            return bf_err_r(
+                r,
+                "failed to generate bytecode to set the TCP congestion control algorithm for '%s'",
+                program->runtime.chain->name);
+        }
+    }
+
     r = _bf_program_generate_log(program, rule);
     if (r)
         return r;

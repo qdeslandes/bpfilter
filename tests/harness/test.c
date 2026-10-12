@@ -298,6 +298,7 @@ bool bft_rule_equal(const struct bf_rule *rule0, const struct bf_rule *rule1)
            rule0->verdict == rule1->verdict &&
            rule0->redirect_ifindex == rule1->redirect_ifindex &&
            rule0->redirect_dir == rule1->redirect_dir &&
+           bf_streq(rule0->tcp_congestion, rule1->tcp_congestion) &&
            bft_list_eq(&rule0->matchers, &rule1->matchers,
                        (bft_list_eq_cb)bft_matcher_equal);
 }

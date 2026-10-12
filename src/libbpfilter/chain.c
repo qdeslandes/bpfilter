@@ -205,6 +205,17 @@ static int _bf_chain_check_rule(struct bf_chain *chain, struct bf_rule *rule)
                         bf_hook_to_str(chain->hook));
     }
 
+    /* Sendmsg hooks are only called for UDP sockets, on which the TCP
+     * congestion control algorithm can't be set. */
+    if (bf_rule_has_tcp_congestion(rule) &&
+        chain->hook != BF_HOOK_CGROUP_SOCK_ADDR_CONNECT4 &&
+        chain->hook != BF_HOOK_CGROUP_SOCK_ADDR_CONNECT6) {
+        return bf_err_r(
+            -ENOTSUP,
+            "%s chains can't set the TCP congestion control algorithm",
+            bf_hook_to_str(chain->hook));
+    }
+
     bf_list_foreach (&rule->matchers, matcher_node) {
         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
         const struct bf_matcher_meta *meta;

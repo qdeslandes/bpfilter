@@ -308,6 +308,10 @@ void bfc_chain_dump(struct bf_chain *chain, struct bf_hookopts *hookopts,
             (void)fprintf(stdout, "        mark 0x%x\n",
                           bf_rule_mark_get(rule));
 
+        if (bf_rule_has_tcp_congestion(rule))
+            (void)fprintf(stdout, "        setsockopt tcp_congestion %s\n",
+                          rule->tcp_congestion);
+
         if (rule->has_counters) {
             if (is_pkt_hook) {
                 (void)fprintf(stdout,

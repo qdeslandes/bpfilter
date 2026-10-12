@@ -57,10 +57,11 @@
     })
 
     enum bf_rule_option_flag {
-        BF_RULE_OPTION_LOG      = 1 << 0,
-        BF_RULE_OPTION_COUNTER  = 1 << 1,
-        BF_RULE_OPTION_MARK     = 1 << 2,
-        BF_RULE_OPTION_LOG_RATE = 1 << 3,
+        BF_RULE_OPTION_LOG            = 1 << 0,
+        BF_RULE_OPTION_COUNTER        = 1 << 1,
+        BF_RULE_OPTION_MARK           = 1 << 2,
+        BF_RULE_OPTION_LOG_RATE       = 1 << 3,
+        BF_RULE_OPTION_TCP_CONGESTION = 1 << 4,
     };
 
     struct bf_rule_options {
@@ -70,6 +71,7 @@
         uint64_t log_rate_ns;
         bool counter;
         uint32_t mark;
+        char tcp_congestion[BF_TCP_CA_NAME_MAX];
     };
 
     static inline int _parse_log_rate(const char *s, uint64_t *ns)
@@ -136,7 +138,7 @@
 %token CHAIN
 %token RULE
 %token SET
-%token NEGATE LOG COUNTER MARK EVERY
+%token NEGATE LOG COUNTER MARK EVERY SETSOCKOPT
 %token REDIRECT_TOKEN
 %token <sval> SET_TYPE
 %token <u64> SET_MIN_SIZE
@@ -343,6 +345,7 @@ rules           : %empty { $$ = NULL; }
                 ;
 rule            : RULE matchers rule_options rule_verdict
                 {
+                    _free_bf_list_ bf_list *matchers = $2;
                     _free_bf_rule_ struct bf_rule *rule = NULL;
 
                     if (bf_rule_new(&rule) < 0)
@@ -355,11 +358,16 @@ rule            : RULE matchers rule_options rule_verdict
                     if ($3.flags & BF_RULE_OPTION_MARK)
                         bf_rule_mark_set(rule, $3.mark);
 
+                    if ($3.flags & BF_RULE_OPTION_TCP_CONGESTION) {
+                        if (bf_rule_set_tcp_congestion(rule, $3.tcp_congestion) < 0)
+                            bf_parse_err("failed to set the TCP congestion control algorithm");
+                    }
+
                     rule->verdict = $4.verdict;
                     if ($4.verdict == BF_VERDICT_REDIRECT)
                         bf_rule_set_redirect(rule, $4.redirect_ifindex, $4.redirect_dir);
 
-                    bf_list_foreach ($2, matcher_node) {
+                    bf_list_foreach (matchers, matcher_node) {
                         struct bf_matcher *matcher = bf_list_node_get_data(matcher_node);
 
                         if (bf_list_add_tail(&rule->matchers, matcher) < 0)
@@ -368,7 +376,6 @@ rule            : RULE matchers rule_options rule_verdict
                         bf_list_node_take_data(matcher_node);
                     }
 
-                    bf_list_free(&$2);
                     $$ = TAKE_PTR(rule);
                 }
                 ;
@@ -429,6 +436,21 @@ rule_option     : LOG
                         .flags = BF_RULE_OPTION_MARK,
                     };
                 }
+                | SETSOCKOPT STRING STRING
+                {
+                    _cleanup_free_ const char *name = $2;
+                    _cleanup_free_ const char *value = $3;
+
+                    if (!bf_streq(name, "tcp_congestion"))
+                        bf_parse_err("unsupported socket option '%s', expected 'tcp_congestion'", name);
+
+                    $$ = (struct bf_rule_options){
+                        .flags = BF_RULE_OPTION_TCP_CONGESTION,
+                    };
+
+                    if (bf_strncpy($$.tcp_congestion, sizeof($$.tcp_congestion), value))
+                        bf_parse_err("TCP congestion control algorithm name '%s' can't exceed %d characters", value, BF_TCP_CA_NAME_MAX - 1);
+                }
 
 log_rate        : STRING
                 {
@@ -469,6 +491,13 @@ rule_options    : %empty { $$ = (struct bf_rule_options){}; }
                             bf_parse_err("duplicate keyword \"mark\" in rule");
                         $1.flags |= BF_RULE_OPTION_MARK;
                         $1.mark = $2.mark;
+                    }
+
+                    if ($2.flags & BF_RULE_OPTION_TCP_CONGESTION) {
+                        if ($1.flags & BF_RULE_OPTION_TCP_CONGESTION)
+                            bf_parse_err("duplicate keyword \"setsockopt tcp_congestion\" in rule");
+                        $1.flags |= BF_RULE_OPTION_TCP_CONGESTION;
+                        memcpy($1.tcp_congestion, $2.tcp_congestion, sizeof($1.tcp_congestion));
                     }
 
                     $$ = $1;

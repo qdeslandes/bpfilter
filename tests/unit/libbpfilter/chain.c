@@ -497,6 +497,32 @@ static void invalid_log_opts_for_hook(void **state)
     }
 }
 
+static void tcp_congestion_supported_hooks(void **state)
+{
+    (void)state;
+
+    for (enum bf_hook hook = 0; hook < _BF_HOOK_MAX; ++hook) {
+        _free_bf_chain_ struct bf_chain *chain = NULL;
+        _clean_bf_list_ bf_list rules =
+            bf_list_default(bf_rule_free, bf_rule_pack);
+        struct bf_rule *r0 = NULL;
+        int r;
+
+        assert_ok(bf_rule_new(&r0));
+        assert_ok(bf_rule_set_tcp_congestion(r0, "reno"));
+        assert_ok(bf_list_add_tail(&rules, r0));
+
+        r = bf_chain_new(&chain, "test", hook, BF_VERDICT_ACCEPT, NULL, &rules);
+
+        // Only connect hooks see TCP sockets
+        if (hook == BF_HOOK_CGROUP_SOCK_ADDR_CONNECT4 ||
+            hook == BF_HOOK_CGROUP_SOCK_ADDR_CONNECT6)
+            assert_ok(r);
+        else
+            assert_err(r);
+    }
+}
+
 static void get_set_by_name(void **state)
 {
     _free_bf_chain_ struct bf_chain *chain = bft_chain_dummy(true);
@@ -520,6 +546,7 @@ int main(void)
         cmocka_unit_test(incompatible_matchers_disable_rule),
         cmocka_unit_test(sock_addr_log_flag),
         cmocka_unit_test(invalid_log_opts_for_hook),
+        cmocka_unit_test(tcp_congestion_supported_hooks),
         cmocka_unit_test(policy_validation),
         cmocka_unit_test(set_component_unsupported_hook),
         cmocka_unit_test(get_set_by_name),

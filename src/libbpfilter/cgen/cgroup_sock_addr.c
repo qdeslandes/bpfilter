@@ -10,14 +10,17 @@
 #include <linux/if_ether.h>
 
 #include <assert.h>
+#include <netinet/tcp.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 
 #include <bpfilter/btf.h>
 #include <bpfilter/chain.h>
 #include <bpfilter/elfstub.h>
 #include <bpfilter/flavor.h>
+#include <bpfilter/helper.h>
 #include <bpfilter/hook.h>
 #include <bpfilter/logger.h>
 #include <bpfilter/matcher.h>
@@ -460,6 +463,68 @@ static int _bf_cgroup_sock_addr_get_verdict(enum bf_verdict verdict,
     }
 }
 
+static_assert(BF_TCP_CA_NAME_MAX % sizeof(uint32_t) == 0,
+              "the TCP congestion control algorithm name is written 4 bytes at "
+              "a time");
+static_assert(BF_TCP_CA_NAME_MAX <= 64,
+              "the TCP congestion control algorithm name must fit in the "
+              "scratch area");
+
+/**
+ * @brief Generate bytecode to set the socket's TCP congestion control
+ *        algorithm.
+ *
+ * The algorithm name is written into the scratch area, zero-padded to
+ * `BF_TCP_CA_NAME_MAX` bytes, and passed to `bpf_setsockopt()`. The kernel
+ * stops reading the name at the first `\0`.
+ *
+ * `bpf_setsockopt()` fails if the socket is not a TCP socket, or if the
+ * algorithm is not available: BPF programs can't load the kernel module
+ * implementing an algorithm. The return value is ignored, so the socket is
+ * left unchanged and the rule's verdict still applies.
+ *
+ * @param program Program to emit the instructions into. Can't be NULL.
+ * @param name Name of the algorithm. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+static int
+_bf_cgroup_sock_addr_gen_inline_set_tcp_congestion(struct bf_program *program,
+                                                   const char *name)
+{
+    char optval[BF_TCP_CA_NAME_MAX] = {};
+    int r;
+
+    assert(program);
+    assert(name);
+
+    r = bf_strncpy(optval, sizeof(optval), name);
+    if (r) {
+        return bf_err_r(
+            r, "TCP congestion control algorithm name '%s' is too long", name);
+    }
+
+    /* `BPF_ST_MEM` stores 32-bit immediates, so the name is written 4 bytes at
+     * a time. The program runs on the host generating it: `memcpy()` keeps the
+     * bytes in order regardless of the endianness. */
+    for (size_t i = 0; i < sizeof(optval); i += sizeof(uint32_t)) {
+        uint32_t chunk;
+
+        memcpy(&chunk, &optval[i], sizeof(chunk));
+        EMIT(program,
+             BPF_ST_MEM(BPF_W, BPF_REG_10, BF_PROG_SCR_OFF(i), (int32_t)chunk));
+    }
+
+    EMIT(program, BPF_MOV64_REG(BPF_REG_1, BPF_REG_6));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_2, SOL_TCP));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_3, TCP_CONGESTION));
+    EMIT(program, BPF_MOV64_REG(BPF_REG_4, BPF_REG_10));
+    EMIT(program, BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, BF_PROG_SCR_OFF(0)));
+    EMIT(program, BPF_MOV64_IMM(BPF_REG_5, sizeof(optval)));
+    EMIT(program, BPF_EMIT_CALL(BPF_FUNC_setsockopt));
+
+    return 0;
+}
+
 #define _BF_SOCK_ADDR_NS_PID_OFF                                               \
     BF_PROG_SCR_OFF(offsetof(struct bf_runtime_sock_addr, ns_pid))
 
@@ -692,6 +757,8 @@ static int _bf_cgroup_sock_addr_gen_inline_log(struct bf_program *program,
 const struct bf_flavor_ops bf_flavor_ops_cgroup_sock_addr = {
     .gen_inline_prologue = _bf_cgroup_sock_addr_gen_inline_prologue,
     .gen_inline_epilogue = _bf_cgroup_sock_addr_gen_inline_epilogue,
+    .gen_inline_set_tcp_congestion =
+        _bf_cgroup_sock_addr_gen_inline_set_tcp_congestion,
     .get_verdict = _bf_cgroup_sock_addr_get_verdict,
     .gen_inline_matcher = _bf_cgroup_sock_addr_gen_inline_matcher,
     .gen_inline_log = _bf_cgroup_sock_addr_gen_inline_log,

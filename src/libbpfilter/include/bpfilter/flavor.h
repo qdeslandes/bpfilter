@@ -116,6 +116,21 @@ struct bf_flavor_ops
                                enum bf_redirect_dir dir);
 
     /**
+     * @brief Generate bytecode to set the socket's TCP congestion control
+     *        algorithm.
+     *
+     * Setting the algorithm is best-effort: if the kernel can't set it, the
+     * socket is left unchanged and the rule's verdict still applies.
+     *
+     * @param program Program to generate bytecode for. Can't be NULL.
+     * @param name Name of the TCP congestion control algorithm. Must be
+     *        shorter than `BF_TCP_CA_NAME_MAX`. Can't be NULL.
+     * @return 0 on success, or a negative errno value on failure.
+     */
+    int (*gen_inline_set_tcp_congestion)(struct bf_program *program,
+                                         const char *name);
+
+    /**
      * Generates a flavor-specific return code corresponding to the verdict.
      *
      * Note this function only needs to handle terminal verdicts - verdicts that

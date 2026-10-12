@@ -431,6 +431,7 @@ Rules are defined such as:
         [log [$HEADERS] [every $FREQUENCY]]
         [counter]
         [mark $MARK]
+        [setsockopt tcp_congestion $ALGORITHM]
         $VERDICT
 
 With:
@@ -444,6 +445,7 @@ With:
     Each form accepts an optional ``every $FREQUENCY`` suffix to rate-limit log events. ``$FREQUENCY`` is a positive number (integer or decimal) followed by a unit: ``ns``, ``us``, ``ms``, or ``s`` (e.g. ``every 1s``, ``every 500ms``, ``every 1.5s``). At most one log entry is emitted per ``$FREQUENCY`` interval per rule. Without ``every``, every match is logged.
   - ``counter``: optional literal. If set, the filter will count the number of events matched by the rule. For packet-based hooks, this includes both the number of packets and the total bytes. For ``BF_HOOK_CGROUP_SOCK_ADDR_*`` hooks, this counts the number of socket operations (``connect()`` or ``sendmsg()`` calls).
   - ``mark``: optional, ``$MARK`` must be a valid decimal or hexadecimal 32-bits value. If set, write the packet's marker value. This marker can be used later on in a rule (see ``meta.mark``) or with a TC filter.
+  - ``setsockopt tcp_congestion``: optional, only supported by ``BF_HOOK_CGROUP_SOCK_ADDR_CONNECT4`` and ``BF_HOOK_CGROUP_SOCK_ADDR_CONNECT6``. Set the TCP congestion control algorithm of the socket to ``$ALGORITHM`` (e.g. ``reno``, ``cubic``, ``bbr``), which is at most 15 characters long. The algorithm must be available when the socket connects (see ``net.ipv4.tcp_available_congestion_control``): BPF programs can't load the kernel module implementing it. If the algorithm can't be set, for example because it is not available or because the socket is not a TCP socket, the socket is left unchanged and the rule's verdict still applies.
   - ``$VERDICT``: action taken by the rule if the packet is matched against **all** the criteria: either ``ACCEPT``, ``DROP``, ``CONTINUE``, ``NEXT``, or ``REDIRECT``.
 
     - ``ACCEPT``: forward the packet to the kernel.

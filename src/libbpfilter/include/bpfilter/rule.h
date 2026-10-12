@@ -19,6 +19,10 @@
 
 #define BF_RULE_MARK_MASK (0x00000000ffffffffULL)
 
+/** Size of a TCP congestion control algorithm name, including the trailing
+ * `\0`. Mirrors the kernel's `TCP_CA_NAME_MAX`. */
+#define BF_TCP_CA_NAME_MAX 16
+
 /**
  * @brief Return the string representation of a `bf_log_opt` enumeration value.
  *
@@ -89,6 +93,11 @@ struct bf_rule
     uint32_t redirect_ifindex;
     /** Direction for REDIRECT verdict. */
     enum bf_redirect_dir redirect_dir;
+
+    /** TCP congestion control algorithm to set on the socket, empty if not
+     * set. Only supported by `cgroup_sock_addr` connect hooks. See
+     * `bf_rule_set_tcp_congestion`. */
+    char tcp_congestion[BF_TCP_CA_NAME_MAX];
 };
 
 static_assert(
@@ -194,4 +203,25 @@ static inline bool bf_rule_has_redirect(const struct bf_rule *rule)
     assert(rule);
 
     return rule->redirect_ifindex != 0;
+}
+
+/**
+ * @brief Set the TCP congestion control algorithm the rule applies.
+ *
+ * The algorithm isn't validated against the algorithms available in the
+ * kernel: they can change after the rule is created.
+ *
+ * @param rule Rule to set the TCP congestion control algorithm for. On
+ *        failure, `rule` is unchanged. Can't be NULL.
+ * @param name Name of the TCP congestion control algorithm. Must be 1 to
+ *        `BF_TCP_CA_NAME_MAX - 1` characters long. Can't be NULL.
+ * @return 0 on success, or a negative errno value on failure.
+ */
+int bf_rule_set_tcp_congestion(struct bf_rule *rule, const char *name);
+
+static inline bool bf_rule_has_tcp_congestion(const struct bf_rule *rule)
+{
+    assert(rule);
+
+    return rule->tcp_congestion[0] != '\0';
 }

@@ -56,3 +56,8 @@ chain cgroup_sock_addr_connect6 BF_HOOK_CGROUP_SOCK_ADDR_CONNECT6 ACCEPT
         udp.dport range 1024-4096
         counter
         ACCEPT
+    rule
+        meta.l4_proto eq tcp
+        setsockopt tcp_congestion reno
+        counter
+        ACCEPT

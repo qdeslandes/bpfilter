@@ -23,6 +23,8 @@
 
 %s STATE_HOOK_OPTS
 %s STATE_MARK_OPTS
+%s STATE_SETSOCKOPT_NAME
+%s STATE_SETSOCKOPT_VALUE
 %s STATE_LOG_EVERY
 %s STATE_REDIRECT_IFACE
 %s STATE_REDIRECT_DIR
@@ -92,6 +94,23 @@ REDIRECT                 { BEGIN(STATE_REDIRECT_IFACE); return REDIRECT_TOKEN; }
 mark            { BEGIN(STATE_MARK_OPTS); return MARK; }
 <STATE_MARK_OPTS>{
     {int} {
+        BEGIN(INITIAL);
+        yylval.sval = strdup(yytext);
+        return STRING;
+    }
+}
+
+    /* Socket options */
+setsockopt      { BEGIN(STATE_SETSOCKOPT_NAME); return SETSOCKOPT; }
+<STATE_SETSOCKOPT_NAME>{
+    [a-z0-9_]+ {
+        BEGIN(STATE_SETSOCKOPT_VALUE);
+        yylval.sval = strdup(yytext);
+        return STRING;
+    }
+}
+<STATE_SETSOCKOPT_VALUE>{
+    [a-zA-Z0-9_.-]+ {
         BEGIN(INITIAL);
         yylval.sval = strdup(yytext);
         return STRING;

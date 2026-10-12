@@ -6,6 +6,8 @@
 "counter"
 "log"
 "mark"
+"setsockopt"
+"tcp_congestion"
 
 # Verdicts
 "ACCEPT"
